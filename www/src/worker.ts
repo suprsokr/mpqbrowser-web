@@ -1,18 +1,39 @@
-import init, { MpqStreamingArchive } from 'wow-mpq-web';
+import initMpq, { MpqStreamingArchive } from 'wow-mpq-web';
+import initBlp, { blpToPng } from 'wow-blp-web';
 
 interface ListMessage {
   type: 'list';
+  id: number;
   file: File;
   path: string;
 }
 
-type WorkerMessage = ListMessage;
+interface ReadBlpMessage {
+  type: 'readBlp';
+  id: number;
+  file: File;
+  path: string;
+  name: string;
+}
 
-let initPromise: Promise<unknown> | null = null;
+type WorkerMessage = ListMessage | ReadBlpMessage;
 
-function ensureInit(): Promise<unknown> {
+interface ListedEntry {
+  name: string;
+  size: number;
+  compressed_size: number;
+  flags: number;
+  compressed: boolean;
+  encrypted: boolean;
+  single_unit: boolean;
+  exists: boolean;
+}
+
+let initPromise: Promise<[unknown, unknown]> | null = null;
+
+function ensureInit(): Promise<[unknown, unknown]> {
   if (!initPromise) {
-    initPromise = init();
+    initPromise = Promise.all([initMpq(), initBlp()]);
   }
   return initPromise;
 }
@@ -63,37 +84,62 @@ function readRange(file: File, offset: number, length: number): Uint8Array {
   }
 }
 
-interface ListedEntry {
-  name: string;
-  size: number;
-  compressed_size: number;
-  flags: number;
-  compressed: boolean;
-  encrypted: boolean;
-  single_unit: boolean;
-  exists: boolean;
+function isBlpPath(name: string): boolean {
+  return name.toLowerCase().endsWith('.blp');
+}
+
+async function readBlp(file: File, path: string, name: string): Promise<Uint8Array> {
+  const archive = new MpqStreamingArchive(file, readRange);
+  try {
+    const blpBytes = archive.readFile(name);
+    log('readBlp', { path, name, size: blpBytes.length });
+    return blpToPng(blpBytes);
+  } finally {
+    archive.free();
+  }
 }
 
 self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
   const msg = event.data;
-  if (msg.type !== 'list') {
+
+  if (msg.type === 'list') {
+    log('listing', msg.file.name, 'size', msg.file.size);
+
+    try {
+      await ensureInit();
+      const archive = new MpqStreamingArchive(msg.file, readRange);
+      const entries = (archive.list() as ListedEntry[]).map((entry) => ({
+        ...entry,
+        archive: msg.path,
+      }));
+      archive.free();
+      self.postMessage({ type: 'listResult', id: msg.id, entries });
+    } catch (err) {
+      log('listing failed', msg.file.name, err);
+      self.postMessage({ type: 'error', id: msg.id, error: String(err) });
+    }
     return;
   }
 
-  log('listing', msg.file.name, 'size', msg.file.size);
+  if (msg.type === 'readBlp') {
+    if (!isBlpPath(msg.name)) {
+      self.postMessage({
+        type: 'error',
+        id: msg.id,
+        error: `Not a BLP file: ${msg.name}`,
+      });
+      return;
+    }
 
-  try {
-    await ensureInit();
-    const archive = new MpqStreamingArchive(msg.file, readRange);
-    const entries = (archive.list() as ListedEntry[]).map((entry) => ({
-      ...entry,
-      archive: msg.path,
-    }));
-    archive.free();
-    self.postMessage({ type: 'listResult', entries });
-  } catch (err) {
-    log('listing failed', msg.file.name, err);
-    self.postMessage({ type: 'error', error: String(err) });
+    try {
+      await ensureInit();
+      const png = await readBlp(msg.file, msg.path, msg.name);
+      self.postMessage({ type: 'blpResult', id: msg.id, png });
+    } catch (err) {
+      log('readBlp failed', msg.path, msg.name, err);
+      self.postMessage({ type: 'error', id: msg.id, error: String(err) });
+    }
+    return;
   }
 };
 

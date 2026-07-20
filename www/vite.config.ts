@@ -11,6 +11,6 @@ export default defineConfig({
   // resolves to a non-existent path and the dev server returns the SPA
   // fallback HTML. Excluding it keeps the package in its original location.
   optimizeDeps: {
-    exclude: ['wow-mpq-web'],
+    exclude: ['wow-mpq-web', 'wow-blp-web'],
   },
 });

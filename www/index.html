@@ -75,6 +75,33 @@
       .flag.enc { background: #7c3aed; }
       .flag.comp { background: #059669; }
       .flag.single { background: #b45309; }
+      tr.blp-preview-trigger td {
+        cursor: pointer;
+      }
+      tr.blp-preview-trigger:hover td {
+        background: #1f3a56;
+      }
+      tr.blp-preview-row td {
+        background: #181818;
+        border-bottom: 1px solid #333;
+      }
+      .blp-preview-loading,
+      .blp-preview-error {
+        padding: 1rem;
+        color: #aaa;
+      }
+      .blp-preview-error {
+        color: #ef4444;
+      }
+      .blp-preview-image {
+        padding: 0.5rem;
+      }
+      .blp-preview-image img {
+        max-width: 100%;
+        max-height: 512px;
+        border: 1px solid #333;
+        background: #000;
+      }
       #progress {
         width: 100%;
         max-width: 400px;
