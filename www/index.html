@@ -102,6 +102,70 @@
         border: 1px solid #333;
         background: #000;
       }
+      tr.m2-preview-trigger td {
+        cursor: pointer;
+      }
+      tr.m2-preview-trigger:hover td {
+        background: #1f3a56;
+      }
+      tr.m2-preview-row td {
+        background: #181818;
+        border-bottom: 1px solid #333;
+      }
+      .m2-preview-loading,
+      .m2-preview-error {
+        padding: 1rem;
+        color: #aaa;
+      }
+      .m2-preview-error {
+        color: #ef4444;
+      }
+      .m2-preview-container {
+        padding: 0.5rem;
+      }
+      .m2-canvas {
+        display: block;
+        width: 100%;
+        height: 480px;
+        max-width: 720px;
+        border: 1px solid #333;
+        background: #111;
+        border-radius: 0.25rem;
+        touch-action: none;
+        cursor: grab;
+      }
+      .m2-canvas:active {
+        cursor: grabbing;
+      }
+      .m2-controls {
+        display: flex;
+        gap: 0.75rem;
+        align-items: center;
+        flex-wrap: wrap;
+        margin-top: 0.5rem;
+      }
+      .m2-controls select,
+      .m2-controls button {
+        font-size: 0.85rem;
+        padding: 0.35rem 0.6rem;
+      }
+      .m2-controls select {
+        background: #1a1a1a;
+        color: #eee;
+        border: 1px solid #444;
+        border-radius: 0.25rem;
+      }
+      .m2-wire-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+        font-size: 0.85rem;
+        color: #ccc;
+      }
+      .m2-info {
+        font-size: 0.8rem;
+        color: #888;
+      }
       #progress {
         width: 100%;
         max-width: 400px;
@@ -112,7 +176,9 @@
   <body>
     <h1>MPQ Browser</h1>
     <p>
-      Select a folder containing one or more MPQ files.
+      Select a folder containing one or more MPQ files. Click a
+      <code>.blp</code> texture to preview it, or a <code>.m2</code> model
+      to open an interactive 3D viewer with animations and textures.
     </p>
     <button id="pick-folder">Select Folder</button>
     <div id="status">Ready</div>

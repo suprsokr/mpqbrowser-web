@@ -1,3 +1,6 @@
+import { M2Viewer, type M2Payload, type AnimationInfo } from './m2viewer';
+import { animationName } from './anim_names';
+
 interface MpqEntry {
   archive: string;
   name: string;
@@ -51,6 +54,7 @@ interface WorkerResponse {
   id?: number;
   entries?: MpqEntry[];
   png?: Uint8Array;
+  payload?: M2Payload;
   error?: string;
 }
 
@@ -75,6 +79,8 @@ function ensureWorker(): Worker {
         pending.resolve(data.entries as unknown);
       } else if (data.type === 'blpResult') {
         pending.resolve(data.png as unknown);
+      } else if (data.type === 'm2Result') {
+        pending.resolve(data.payload as unknown);
       } else {
         pending.reject(new Error(`Unknown response type: ${data.type}`));
       }
@@ -84,6 +90,10 @@ function ensureWorker(): Worker {
 }
 
 function clearPreviews(): void {
+  for (const viewer of activeViewers.values()) {
+    viewer.dispose();
+  }
+  activeViewers.clear();
   for (const row of activePreviews.values()) {
     if (row.dataset.url) {
       URL.revokeObjectURL(row.dataset.url);
@@ -121,6 +131,13 @@ function listArchive(path: string, file: File): Promise<MpqEntry[]> {
 function readBlpPreview(path: string, file: File, name: string): Promise<Uint8Array> {
   return sendMessage<Uint8Array>('readBlp', { file, path, name });
 }
+
+function readM2Preview(path: string, file: File, name: string): Promise<M2Payload> {
+  return sendMessage<M2Payload>('readM2', { file, path, name });
+}
+
+/** WebGL viewers keyed by preview key so we can dispose them on teardown. */
+const activeViewers = new Map<string, M2Viewer>();
 
 function setStatus(message: string): void {
   statusEl.textContent = message;
@@ -192,10 +209,16 @@ function renderPage(): void {
       ${pageEntries
         .map(
           (e) => {
-            const isBlp = e.name.toLowerCase().endsWith('.blp');
-            const blpClass = isBlp ? 'blp-preview-trigger' : '';
+            const lower = e.name.toLowerCase();
+            const isBlp = lower.endsWith('.blp');
+            const isM2 = lower.endsWith('.m2');
+            const triggerClass = isBlp
+              ? 'blp-preview-trigger'
+              : isM2
+                ? 'm2-preview-trigger'
+                : '';
             return `
-        <tr class="${blpClass}" data-archive="${escapeHtml(e.archive)}" data-name="${escapeHtml(e.name)}">
+        <tr class="${triggerClass}" data-archive="${escapeHtml(e.archive)}" data-name="${escapeHtml(e.name)}">
           <td>${escapeHtml(e.archive)}</td>
           <td class="path">${escapeHtml(e.name)}</td>
           <td class="num">${humanSize(e.size)}</td>
@@ -392,14 +415,146 @@ async function toggleBlpPreview(row: HTMLTableRowElement): Promise<void> {
   }
 }
 
+async function toggleM2Preview(row: HTMLTableRowElement): Promise<void> {
+  const archive = row.getAttribute('data-archive');
+  const name = row.getAttribute('data-name');
+  if (!archive || !name) {
+    return;
+  }
+
+  const key = previewKey(archive, name);
+  const existing = activePreviews.get(key);
+  if (existing) {
+    const viewer = activeViewers.get(key);
+    if (viewer) {
+      viewer.dispose();
+      activeViewers.delete(key);
+    }
+    existing.remove();
+    activePreviews.delete(key);
+    return;
+  }
+
+  const file = archiveFiles.get(archive);
+  if (!file) {
+    return;
+  }
+
+  const previewRow = document.createElement('tr');
+  previewRow.className = 'm2-preview-row';
+  const cell = document.createElement('td');
+  cell.colSpan = 5;
+  cell.innerHTML = '<div class="m2-preview-loading">Loading model...</div>';
+  previewRow.appendChild(cell);
+  row.after(previewRow);
+  activePreviews.set(key, previewRow);
+
+  try {
+    const payload = await readM2Preview(archive, file, name);
+    if (!activePreviews.has(key)) {
+      return;
+    }
+
+    // Build the viewer UI: canvas + controls.
+    cell.innerHTML = '';
+    const container = document.createElement('div');
+    container.className = 'm2-preview-container';
+
+    const canvas = document.createElement('canvas');
+    canvas.className = 'm2-canvas';
+    container.appendChild(canvas);
+
+    const controls = document.createElement('div');
+    controls.className = 'm2-controls';
+
+    const animSelect = document.createElement('select');
+    animSelect.className = 'm2-anim-select';
+
+    const playBtn = document.createElement('button');
+    playBtn.textContent = 'Pause';
+
+    const wireLabel = document.createElement('label');
+    wireLabel.className = 'm2-wire-label';
+    const wireCheck = document.createElement('input');
+    wireCheck.type = 'checkbox';
+    wireLabel.appendChild(wireCheck);
+    wireLabel.appendChild(document.createTextNode(' Wireframe'));
+
+    const info = document.createElement('span');
+    info.className = 'm2-info';
+    info.textContent = `${payload.textures.length} texture(s)`;
+
+    controls.appendChild(animSelect);
+    controls.appendChild(playBtn);
+    controls.appendChild(wireLabel);
+    controls.appendChild(info);
+    container.appendChild(controls);
+    cell.appendChild(container);
+
+    const viewer = new M2Viewer(canvas, payload);
+    activeViewers.set(key, viewer);
+
+    await viewer.ready;
+    if (!activeViewers.has(key)) {
+      // Preview was closed while loading.
+      viewer.dispose();
+      return;
+    }
+
+    // Populate animation dropdown.
+    const anims: AnimationInfo[] = viewer.animations;
+    if (anims.length === 0) {
+      const opt = document.createElement('option');
+      opt.textContent = 'No animations';
+      animSelect.appendChild(opt);
+      animSelect.disabled = true;
+    } else {
+      anims.forEach((a) => {
+        const opt = document.createElement('option');
+        opt.value = String(a.index);
+        opt.textContent = animationName(a.id);
+        animSelect.appendChild(opt);
+      });
+      animSelect.addEventListener('change', () => {
+        viewer.setAnimation(Number(animSelect.value));
+      });
+    }
+
+    let playing = true;
+    playBtn.addEventListener('click', () => {
+      playing = !playing;
+      viewer.setPlaying(playing);
+      playBtn.textContent = playing ? 'Pause' : 'Play';
+    });
+    wireCheck.addEventListener('change', () => {
+      viewer.setWireframe(wireCheck.checked);
+    });
+  } catch (e) {
+    if (!activePreviews.has(key)) {
+      return;
+    }
+    const viewer = activeViewers.get(key);
+    if (viewer) {
+      viewer.dispose();
+      activeViewers.delete(key);
+    }
+    cell.innerHTML = `<div class="m2-preview-error">Failed to preview: ${escapeHtml(String(e))}</div>`;
+  }
+}
+
 function handleTableClick(event: MouseEvent): void {
   const target = event.target as HTMLElement;
   const row = target.closest('tbody > tr') as HTMLTableRowElement | null;
-  if (!row || !row.classList.contains('blp-preview-trigger')) {
+  if (!row) {
     return;
   }
-  event.preventDefault();
-  void toggleBlpPreview(row);
+  if (row.classList.contains('blp-preview-trigger')) {
+    event.preventDefault();
+    void toggleBlpPreview(row);
+  } else if (row.classList.contains('m2-preview-trigger')) {
+    event.preventDefault();
+    void toggleM2Preview(row);
+  }
 }
 
 pickButton.addEventListener('click', onPickFolder);

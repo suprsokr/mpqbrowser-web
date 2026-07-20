@@ -8,6 +8,13 @@ Click any `.blp` texture file in the list to render a preview of it directly
 in the browser. The preview is decoded in the same Web Worker that lists the
 archive, so the UI stays responsive.
 
+Click any `.m2` model file to open an interactive **3D viewer**: drag to
+orbit, scroll to zoom, pick an animation from the dropdown, and toggle
+wireframe. The model's `.skin` and referenced `.blp` textures are read
+from the same archive; skeletal animation and CPU vertex skinning are
+performed by the `wow-m2-web` package, and the model is rendered with
+WebGL2.
+
 ## How it stays memory-efficient
 
 - Uses the browser **File System Access API** (`showDirectoryPicker`) so the
@@ -21,6 +28,11 @@ archive, so the UI stays responsive.
 - BLP texture previews are decoded by `wow-blp-web` in the same Web Worker.
   The decoded PNG is sent back to the main thread as a blob URL and rendered
   in a new table row under the clicked file.
+- M2 model previews use `wow-m2-web`: the worker reads the `.m2`, its
+  `.skin`, and referenced `.blp` textures from the archive (decoding the
+  textures to RGBA), then transfers the raw bytes + decoded pixels to the
+  main thread. A small WebGL2 viewer runs the animation loop and CPU
+  vertex skinning locally for smooth interaction.
 
 ## Requirements
 
