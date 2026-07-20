@@ -49,6 +49,16 @@ npm run build
 
 Output is placed in `www/dist`.
 
+## GitHub Pages
+
+The site is deployed automatically to GitHub Pages on every push to `main` via
+`.github/workflows/pages.yml`. The live site is available at:
+
+<https://suprsokr.github.io/mpqbrowser-web/>
+
+The Vite `base` path is set to `/mpqbrowser-web/` only when `GITHUB_PAGES=true`
+is set during the build, so local development continues to use `/`.
+
 ## Why a Web Worker?
 
 The `wow-mpq-web` `MpqStreamingArchive` class requires a synchronous read

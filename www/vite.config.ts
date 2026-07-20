@@ -1,6 +1,8 @@
 import { defineConfig } from 'vite';
 
 export default defineConfig({
+  // GitHub Pages serves the site under the repository name path.
+  base: process.env.GITHUB_PAGES ? '/mpqbrowser-web/' : '/',
   build: {
     target: 'es2022',
   },
