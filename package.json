@@ -1,0 +1,21 @@
+{
+  "name": "mpqbrowser",
+  "version": "0.1.0",
+  "description": "Memory-efficient browser-based World of Warcraft MPQ archive browser",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "postinstall": "cd www && npm install",
+    "dev": "cd www && npm run dev",
+    "build": "cd www && npm run build",
+    "preview": "cd www && npm run preview"
+  },
+  "keywords": [
+    "warcraft",
+    "wow",
+    "mpq",
+    "browser",
+    "wasm"
+  ],
+  "license": "MIT OR Apache-2.0"
+}
