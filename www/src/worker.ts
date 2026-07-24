@@ -86,6 +86,8 @@ interface M2Payload {
   skinBytes: Uint8Array | null;
   textures: DecodedTexture[];
   character: CharacterPayload | null;
+  /** Human-readable reason character assembly was skipped/failed, if any. */
+  characterError?: string;
 }
 
 interface ListedEntry {
@@ -178,6 +180,11 @@ function normalizePath(name: string): string {
   return name.replace(/\//g, '\\');
 }
 
+/** Basename (lowercased) of an MPQ/OS path, split on either separator. */
+function baseName(name: string): string {
+  return name.split(/[\\/]/).pop()?.toLowerCase() ?? name.toLowerCase();
+}
+
 /** Higher number = higher patch priority when resolving cross-MPQ assets. */
 function patchPriority(path: string): number {
   const base = path.split(/[\\/]/).pop()?.toLowerCase() ?? path.toLowerCase();
@@ -235,19 +242,31 @@ function choiceFromOptions(options: CharacterChoiceOptions): CharacterChoice {
 }
 
 function decodeLayer(readAny: (name: string) => Uint8Array, req: { texture: string; region?: string | null; layer: number }) {
-  const decoded = decodeWmvxBlp(readAny(req.texture), 0) as { width: number; height: number; rgba: Uint8Array };
-  return {
-    rgba: decoded.rgba,
-    width: decoded.width,
-    height: decoded.height,
-    region: req.region ?? null,
-    layer: req.layer ?? 0,
-  };
+  try {
+    const decoded = decodeWmvxBlp(readAny(req.texture), 0) as { width: number; height: number; rgba: Uint8Array };
+    return {
+      rgba: decoded.rgba,
+      width: decoded.width,
+      height: decoded.height,
+      region: req.region ?? null,
+      layer: req.layer ?? 0,
+    };
+  } catch (err) {
+    // A single missing body-layer BLP must not sink the whole character.
+    // Skip it (return null) and let compositing use the remaining layers.
+    log('body layer decode failed (skipping)', { texture: req.texture, err: String(err) });
+    return null;
+  }
 }
 
-function decodeTexture(readAny: (name: string) => Uint8Array, filename: string, index: number): DecodedTexture {
-  const decoded = decodeWmvxBlp(readAny(filename), 0) as { width: number; height: number; rgba: Uint8Array };
-  return { index, filename, width: decoded.width, height: decoded.height, rgba: decoded.rgba };
+function decodeTexture(readAny: (name: string) => Uint8Array, filename: string, index: number): DecodedTexture | null {
+  try {
+    const decoded = decodeWmvxBlp(readAny(filename), 0) as { width: number; height: number; rgba: Uint8Array };
+    return { index, filename, width: decoded.width, height: decoded.height, rgba: decoded.rgba };
+  } catch (err) {
+    log('replaceable texture decode failed (skipping)', { filename, err: String(err) });
+    return null;
+  }
 }
 
 function assembleCharacterAppearance(
@@ -270,7 +289,9 @@ function assembleCharacterAppearance(
       replaceableTextures: { hair: string | null; skinExtra: string | null };
       visibleGeosets: number[];
     };
-    const layers = assembled.bodyLayers.map((req) => decodeLayer(readAny, req));
+    const layers = assembled.bodyLayers
+      .map((req) => decodeLayer(readAny, req))
+      .filter((l): l is NonNullable<typeof l> => l !== null);
     const body = composeBodyTexture(layers) as { width: number; height: number; rgba: Uint8Array };
     return {
       choice,
@@ -289,9 +310,11 @@ function tryBuildLegacyCharacter(
   readAny: (name: string) => Uint8Array,
   name: string,
   requestedChoice?: CharacterChoice,
-): CharacterPayload | null {
+): { character: CharacterPayload | null; error?: string } {
   const inferred = inferLegacyCharacter(name);
-  if (!inferred) return null;
+  if (!inferred) {
+    return { character: null, error: `not a legacy character path (expected Character\\<Race>\\<Male|Female>\\...): ${name}` };
+  }
   try {
     const db = new LegacyDatabase(
       readAny('DBFilesClient\\CharSections.dbc'),
@@ -303,13 +326,14 @@ function tryBuildLegacyCharacter(
       const options = db.legacyChoices(inferred.raceId, inferred.gender) as CharacterChoiceOptions;
       const choice = requestedChoice ?? choiceFromOptions(options);
       const appearance = assembleCharacterAppearance(model, db, readAny, inferred.raceId, inferred.gender, options, choice);
-      return { raceId: inferred.raceId, gender: inferred.gender, options, appearance };
+      return { character: { raceId: inferred.raceId, gender: inferred.gender, options, appearance } };
     } finally {
       db.free();
     }
   } catch (err) {
-    log('legacy character assembly unavailable', { name, err: String(err) });
-    return null;
+    const error = String(err);
+    log('legacy character assembly unavailable', { name, err: error });
+    return { character: null, error };
   }
 }
 
@@ -329,13 +353,48 @@ async function readM2(
     path: a.path,
     archive: new MpqStreamingArchive(a.file, readRange),
   }));
+  const ordered = [...archives].sort((a, b) => patchPriority(b.path) - patchPriority(a.path));
+
+  // Lazily-built basename -> full MPQ path index per archive, so lookups can
+  // fall back to matching by filename when the exact directory layout differs
+  // between MPQ sets (e.g. DBCs under a different folder/locale).
+  const listingIndex = new Map<typeof ordered[number], Map<string, string>>();
+  const indexFor = (candidate: typeof ordered[number]): Map<string, string> => {
+    let idx = listingIndex.get(candidate);
+    if (idx) return idx;
+    idx = new Map();
+    try {
+      for (const entry of candidate.archive.list() as ListedEntry[]) {
+        const full = (entry as { name: string }).name;
+        if (!full) continue;
+        const key = baseName(full);
+        if (!idx.has(key)) idx.set(key, full);
+      }
+    } catch (err) {
+      log('archive listing failed for fallback lookup', { path: candidate.path, err: String(err) });
+    }
+    listingIndex.set(candidate, idx);
+    return idx;
+  };
+
   const readAny = (assetName: string): Uint8Array => {
     const norm = normalizePath(assetName);
-    const ordered = [...archives].sort((a, b) => patchPriority(b.path) - patchPriority(a.path));
     let lastErr: unknown = null;
+    // Fast path: exact (case-insensitive hashed) lookup.
     for (const candidate of ordered) {
       try {
         return candidate.archive.readFile(norm) as Uint8Array;
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    // Fallback: match by basename against each archive's listing.
+    const wanted = baseName(assetName);
+    for (const candidate of ordered) {
+      const full = indexFor(candidate).get(wanted);
+      if (!full) continue;
+      try {
+        return candidate.archive.readFile(full) as Uint8Array;
       } catch (err) {
         lastErr = err;
       }
@@ -364,9 +423,12 @@ async function readM2(
     const model = new WmvxModel(m2Bytes, skinBytes);
     let textureDefs: { textureType: number; flags: number; filename: string }[];
     let character: CharacterPayload | null = null;
+    let characterError: string | undefined;
     try {
       textureDefs = model.textures() as typeof textureDefs;
-      character = tryBuildLegacyCharacter(model, readAny, name, requestedChoice);
+      const built = tryBuildLegacyCharacter(model, readAny, name, requestedChoice);
+      character = built.character;
+      characterError = built.error;
     } finally {
       model.free();
     }
@@ -398,7 +460,7 @@ async function readM2(
       }
     });
 
-    return { m2Bytes, skinBytes, textures, character };
+    return { m2Bytes, skinBytes, textures, character, characterError };
   } finally {
     for (const a of archives) {
       a.archive.free();

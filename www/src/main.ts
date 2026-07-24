@@ -532,7 +532,9 @@ async function toggleM2Preview(row: HTMLTableRowElement): Promise<void> {
     info.className = 'm2-info';
     info.textContent = payload.character
       ? `${payload.textures.length} texture(s) | ${characterSummary(payload.character.appearance, payload.character.options)}`
-      : `${payload.textures.length} texture(s)`;
+      : payload.characterError
+        ? `${payload.textures.length} texture(s) | character variants unavailable: ${payload.characterError}`
+        : `${payload.textures.length} texture(s)`;
 
     const charControls = document.createElement('span');
     charControls.className = 'm2-character-controls';

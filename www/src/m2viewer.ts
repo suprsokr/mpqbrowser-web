@@ -56,6 +56,8 @@ export interface M2Payload {
   skinBytes: Uint8Array | null;
   textures: DecodedTexture[];
   character: CharacterPayload | null;
+  /** Human-readable reason character assembly was skipped/failed, if any. */
+  characterError?: string;
 }
 
 interface BatchInfo {
