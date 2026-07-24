@@ -1,4 +1,11 @@
-import { M2Viewer, type M2Payload, type AnimationInfo } from './m2viewer';
+import {
+  M2Viewer,
+  type M2Payload,
+  type AnimationInfo,
+  type CharacterAppearance,
+  type CharacterChoice,
+  type CharacterChoiceOptions,
+} from './m2viewer';
 import { animationName } from './anim_names';
 
 interface MpqEntry {
@@ -132,8 +139,17 @@ function readBlpPreview(path: string, file: File, name: string): Promise<Uint8Ar
   return sendMessage<Uint8Array>('readBlp', { file, path, name });
 }
 
-function readM2Preview(path: string, file: File, name: string): Promise<M2Payload> {
-  return sendMessage<M2Payload>('readM2', { file, path, name });
+function readM2Preview(path: string, file: File, name: string, characterChoice?: CharacterChoice): Promise<M2Payload> {
+  return sendMessage<M2Payload>('readM2', {
+    file,
+    path,
+    name,
+    characterChoice,
+    archives: Array.from(archiveFiles, ([archivePath, archiveFile]) => ({
+      path: archivePath,
+      file: archiveFile,
+    })),
+  });
 }
 
 /** WebGL viewers keyed by preview key so we can dispose them on teardown. */
@@ -415,6 +431,38 @@ async function toggleBlpPreview(row: HTMLTableRowElement): Promise<void> {
   }
 }
 
+
+function optionIndex(values: number[], value: number): number {
+  const i = values.indexOf(value);
+  return i >= 0 ? i : 0;
+}
+
+function cycleChoice(choice: CharacterChoice, options: CharacterChoiceOptions, field: keyof CharacterChoice, delta: number): CharacterChoice {
+  const map: Record<keyof CharacterChoice, number[]> = {
+    skin: options.skins,
+    face: options.faces,
+    hairStyle: options.hairStyles,
+    hairColor: options.hairColors,
+    facialStyle: options.facialStyles,
+    facialColor: options.hairColors,
+  };
+  const values = map[field];
+  if (!values.length) return { ...choice };
+  const next = values[(optionIndex(values, choice[field]), optionIndex(values, choice[field]) + delta + values.length) % values.length];
+  const out = { ...choice, [field]: next } as CharacterChoice;
+  if (field === 'hairColor') out.facialColor = next;
+  return out;
+}
+
+function characterSummary(appearance: CharacterAppearance, options: CharacterChoiceOptions): string {
+  const c = appearance.choice;
+  return `Skin ${optionIndex(options.skins, c.skin) + 1}/${options.skins.length || 1}` +
+    ` | Face ${optionIndex(options.faces, c.face) + 1}/${options.faces.length || 1}` +
+    ` | Hair ${optionIndex(options.hairStyles, c.hairStyle) + 1}/${options.hairStyles.length || 1}` +
+    ` | Colour ${optionIndex(options.hairColors, c.hairColor) + 1}/${options.hairColors.length || 1}` +
+    ` | Facial ${optionIndex(options.facialStyles, c.facialStyle) + 1}/${options.facialStyles.length || 1}`;
+}
+
 async function toggleM2Preview(row: HTMLTableRowElement): Promise<void> {
   const archive = row.getAttribute('data-archive');
   const name = row.getAttribute('data-name');
@@ -482,11 +530,17 @@ async function toggleM2Preview(row: HTMLTableRowElement): Promise<void> {
 
     const info = document.createElement('span');
     info.className = 'm2-info';
-    info.textContent = `${payload.textures.length} texture(s)`;
+    info.textContent = payload.character
+      ? `${payload.textures.length} texture(s) | ${characterSummary(payload.character.appearance, payload.character.options)}`
+      : `${payload.textures.length} texture(s)`;
+
+    const charControls = document.createElement('span');
+    charControls.className = 'm2-character-controls';
 
     controls.appendChild(animSelect);
     controls.appendChild(playBtn);
     controls.appendChild(wireLabel);
+    controls.appendChild(charControls);
     controls.appendChild(info);
     container.appendChild(controls);
     cell.appendChild(container);
@@ -529,6 +583,41 @@ async function toggleM2Preview(row: HTMLTableRowElement): Promise<void> {
     wireCheck.addEventListener('change', () => {
       viewer.setWireframe(wireCheck.checked);
     });
+
+    if (viewer.character) {
+      let character = viewer.character;
+      const buttons: [string, keyof CharacterChoice][] = [
+        ['Skin', 'skin'],
+        ['Face', 'face'],
+        ['Hair', 'hairStyle'],
+        ['Colour', 'hairColor'],
+        ['Facial', 'facialStyle'],
+      ];
+      const applyChoice = async (choice: CharacterChoice): Promise<void> => {
+        info.textContent = 'Updating character...';
+        try {
+          const updated = await readM2Preview(archive, file, name, choice);
+          if (!updated.character || !activeViewers.has(key)) return;
+          character = updated.character;
+          viewer.applyCharacterAppearance(character.appearance);
+          info.textContent = `${payload.textures.length} texture(s) | ${characterSummary(character.appearance, character.options)}`;
+        } catch (e) {
+          info.textContent = `Character update failed: ${String(e)}`;
+        }
+      };
+
+      for (const [label, field] of buttons) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = label;
+        btn.title = `Cycle ${label.toLowerCase()}`;
+        btn.addEventListener('click', () => {
+          const next = cycleChoice(character.appearance.choice, character.options, field, 1);
+          void applyChoice(next);
+        });
+        charControls.appendChild(btn);
+      }
+    }
   } catch (e) {
     if (!activePreviews.has(key)) {
       return;

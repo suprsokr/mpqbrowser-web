@@ -1,13 +1,13 @@
 /**
  * WebGL2 preview renderer for World of Warcraft M2 models.
  *
- * The heavy lifting (parsing, animation, CPU vertex skinning, texture
- * lookup resolution) is done by the `wow-m2-web` wasm package via the
- * `M2Renderer` class. This module owns the WebGL plumbing: an orbit
+ * Parsing, animation, CPU vertex skinning, and batch metadata are done by
+ * the vendored `wmvx-wasm` package via the `WmvxModel` class. This module owns
+ * the WebGL plumbing: an orbit
  * camera, per-batch textured draw calls with the right blend/cull state,
  * and a `requestAnimationFrame` loop that advances the animation.
  */
-import initM2, { M2Renderer } from 'wow-m2-web';
+import initWmvx, { WmvxModel } from '../vendor/wmvx-wasm/wmvx_wasm.js';
 
 /** A decoded texture as produced by the worker. */
 export interface DecodedTexture {
@@ -18,11 +18,44 @@ export interface DecodedTexture {
   rgba: Uint8Array;
 }
 
+export interface CharacterChoiceOptions {
+  skins: number[];
+  faces: number[];
+  hairStyles: number[];
+  hairColors: number[];
+  facialStyles: number[];
+}
+
+export interface CharacterChoice {
+  skin: number;
+  face: number;
+  hairStyle: number;
+  hairColor: number;
+  facialStyle: number;
+  facialColor: number;
+}
+
+export interface CharacterAppearance {
+  choice: CharacterChoice;
+  visibleGeosets: number[];
+  body: DecodedTexture;
+  hair: DecodedTexture | null;
+  skinExtra: DecodedTexture | null;
+}
+
+export interface CharacterPayload {
+  raceId: number;
+  gender: number;
+  options: CharacterChoiceOptions;
+  appearance: CharacterAppearance;
+}
+
 /** Everything needed to build a viewer, produced by the worker. */
 export interface M2Payload {
   m2Bytes: Uint8Array;
   skinBytes: Uint8Array | null;
   textures: DecodedTexture[];
+  character: CharacterPayload | null;
 }
 
 interface BatchInfo {
@@ -30,7 +63,13 @@ interface BatchInfo {
   submeshId: number;
   textureIndex: number;
   textureComboIndex: number;
+  textureDefIndex: number | null;
+  textureType: number;
+  textureFilename: string | null;
   blendMode: number;
+  blendModeName?: string;
+  alphaTested?: boolean;
+  blended?: boolean;
   twoSided: boolean;
   unlit: boolean;
   noDepthWrite: boolean;
@@ -49,7 +88,7 @@ export interface AnimationInfo {
 let m2InitPromise: Promise<unknown> | null = null;
 function ensureM2Init(): Promise<unknown> {
   if (!m2InitPromise) {
-    m2InitPromise = Promise.resolve(initM2());
+    m2InitPromise = Promise.resolve(initWmvx());
   }
   return m2InitPromise;
 }
@@ -210,7 +249,7 @@ const BLEND_MOD2X = 6;
 export class M2Viewer {
   private gl: WebGL2RenderingContext;
   private program: WebGLProgram;
-  private renderer!: M2Renderer;
+  private renderer!: WmvxModel;
   private vao!: WebGLVertexArrayObject;
   private posBuffer!: WebGLBuffer;
   private normalBuffer!: WebGLBuffer;
@@ -218,6 +257,10 @@ export class M2Viewer {
   private indexBuffer!: WebGLBuffer;
   private batches: BatchInfo[] = [];
   private glTextures = new Map<number, WebGLTexture>();
+  private bodyTexture: WebGLTexture | null = null;
+  private hairTexture: WebGLTexture | null = null;
+  private skinExtraTexture: WebGLTexture | null = null;
+  private visibleGeosets: Set<number> | null = null;
   private whiteTexture!: WebGLTexture;
 
   private uMvp: WebGLUniformLocation | null;
@@ -265,7 +308,7 @@ export class M2Viewer {
     await ensureM2Init();
     const gl = this.gl;
 
-    this.renderer = new M2Renderer(
+    this.renderer = new WmvxModel(
       this.payload.m2Bytes,
       this.payload.skinBytes ?? undefined
     );
@@ -311,6 +354,9 @@ export class M2Viewer {
     this.whiteTexture = this.createSolidTexture([200, 200, 200, 255]);
     for (const tex of this.payload.textures) {
       this.glTextures.set(tex.index, this.createTexture(tex));
+    }
+    if (this.payload.character) {
+      this.applyCharacterAppearance(this.payload.character.appearance);
     }
 
     // Frame the model with the camera.
@@ -543,8 +589,10 @@ export class M2Viewer {
       gl.uniform1f(this.uAlphaTest, alphaTest);
       gl.uniform1f(this.uUnlit, b.unlit || this.wireframe ? 1 : 0);
 
-      const glTex = this.glTextures.get(b.textureIndex) ?? this.whiteTexture;
-      gl.bindTexture(gl.TEXTURE_2D, glTex);
+      if (this.visibleGeosets && !this.visibleGeosets.has(b.submeshId)) {
+        continue;
+      }
+      gl.bindTexture(gl.TEXTURE_2D, this.textureForBatch(b));
 
       gl.drawElements(
         this.wireframe ? gl.LINE_STRIP : gl.TRIANGLES,
@@ -556,6 +604,34 @@ export class M2Viewer {
 
     gl.depthMask(true);
     gl.bindVertexArray(null);
+  }
+
+  private textureForBatch(b: BatchInfo): WebGLTexture {
+    if (this.payload.character) {
+      if (b.textureType === 1 && this.bodyTexture) return this.bodyTexture;
+      if (b.textureType === 6 && this.hairTexture) return this.hairTexture;
+      if (b.textureType === 8 && this.skinExtraTexture) return this.skinExtraTexture;
+    }
+    const textureDefIndex = b.textureDefIndex ?? b.textureIndex;
+    return this.glTextures.get(textureDefIndex) ?? this.whiteTexture;
+  }
+
+  applyCharacterAppearance(appearance: CharacterAppearance): void {
+    const gl = this.gl;
+    if (this.bodyTexture) gl.deleteTexture(this.bodyTexture);
+    if (this.hairTexture) gl.deleteTexture(this.hairTexture);
+    if (this.skinExtraTexture) gl.deleteTexture(this.skinExtraTexture);
+    this.bodyTexture = this.createTexture(appearance.body);
+    this.hairTexture = appearance.hair ? this.createTexture(appearance.hair) : null;
+    this.skinExtraTexture = appearance.skinExtra ? this.createTexture(appearance.skinExtra) : null;
+    this.visibleGeosets = new Set(appearance.visibleGeosets);
+    if (this.payload.character) {
+      this.payload.character.appearance = appearance;
+    }
+  }
+
+  get character(): CharacterPayload | null {
+    return this.payload.character;
   }
 
   // --- public control API used by the UI ---
@@ -584,6 +660,9 @@ export class M2Viewer {
       gl.deleteBuffer(this.indexBuffer);
       gl.deleteVertexArray(this.vao);
       for (const t of this.glTextures.values()) gl.deleteTexture(t);
+      if (this.bodyTexture) gl.deleteTexture(this.bodyTexture);
+      if (this.hairTexture) gl.deleteTexture(this.hairTexture);
+      if (this.skinExtraTexture) gl.deleteTexture(this.skinExtraTexture);
       gl.deleteTexture(this.whiteTexture);
       gl.deleteProgram(this.program);
     } catch {

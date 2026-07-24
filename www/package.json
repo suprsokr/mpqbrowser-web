@@ -10,7 +10,6 @@
   },
   "dependencies": {
     "wow-blp-web": "^0.7.2",
-    "wow-m2-web": "^0.7.2",
     "wow-mpq-web": "^0.7.2"
   },
   "devDependencies": {
