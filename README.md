@@ -113,10 +113,15 @@ DATA_DIR=/path/to/WoW/Data npm run share
 ```
 
 `share` starts `server.mjs` and publishes it over HTTPS on the tailnet with
-`tailscale serve --set-path /mpq`, then prints the address to paste into the page's server field
-(`https://<machine>.<tailnet>.ts.net/mpq/`). HTTPS matters: a page served over `https://` cannot
-read an `http://` server, and Tailscale supplies a certificate browsers accept. The serving
-computer's own address works too (`http://<machine>:8088/`) as long as the page is `http://`.
+`tailscale serve --https=8444` (change it with `SHARE_PORT`), then prints
+`https://<machine>.<tailnet>.ts.net:8444/`. That URL serves the page and its archive API from one
+origin, so it needs no permission and no CORS at all: open it, and the archives mount on load.
+
+The same URL goes in the GitHub Pages build's server field. There the page is a public origin
+reading a private address, so Chrome asks once to "allow access to devices on your local network"
+(its Local Network Access gate; the server answers the preflight with
+`access-control-allow-private-network`). HTTPS matters too: a page served over `https://` cannot
+read an `http://` server. A local `http://` page can also use `http://<machine>:8088/`.
 
 `server.mjs` sends `access-control-allow-origin: *` (override with `ALLOW_ORIGIN`) on the archive
 listings and on every byte range, so a page on another origin can mount them. The page remembers

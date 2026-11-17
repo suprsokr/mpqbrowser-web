@@ -1,18 +1,20 @@
 #!/usr/bin/env node
 // Share the archives with a page running anywhere: start `server.mjs`, then publish it over HTTPS
-// on the tailnet with a certificate browsers accept, and print the address to paste into the page.
+// on the tailnet with a certificate browsers accept, and print the addresses to use.
 //
 //   DATA_DIR=/path/to/WoW/Data npm run share
 //
-// The page itself can be a local build or https://suprsokr.github.io/mpqbrowser-web/: an HTTPS page
-// cannot read an `http://` server (mixed content), which is why the tailnet HTTPS URL is the one
-// worth printing.
+// The published URL serves the page and its archive API from one origin, so nothing asks for a
+// local-network permission. The GitHub Pages build can point at the same URL from its server field,
+// which Chrome gates behind "allow access to devices on your local network".
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 
 const DATA_DIR = process.env.DATA_DIR;
 const PORT = Number(process.env.PORT || 8088);
-const PATH_PREFIX = process.env.PATH_PREFIX || '/mpq';
+/// The HTTPS port the app is published on: its own port keeps the app at the root, where the
+/// build's absolute asset URLs resolve. 443 is often already serving something else.
+const SHARE_PORT = Number(process.env.SHARE_PORT || 8444);
 
 if (!DATA_DIR) {
   console.error('Set DATA_DIR to the client data folder holding the .mpq archives, e.g.\n  DATA_DIR=/path/to/WoW/Data npm run share');
@@ -80,7 +82,7 @@ if (!name) {
 try {
   execFileSync(
     'tailscale',
-    ['serve', '--bg', '--yes', '--set-path', PATH_PREFIX, String(PORT)],
+    ['serve', '--bg', '--yes', `--https=${SHARE_PORT}`, String(PORT)],
     { stdio: 'inherit' }
   );
 } catch (e) {
@@ -89,8 +91,11 @@ try {
   process.exit(0);
 }
 
+const shared = `https://${name}:${SHARE_PORT}/`;
 console.log(
-  `\nPaste this into the page's archive-server field:\n  https://${name}${PATH_PREFIX}/\n` +
-    `(an http:// page can also use http://${name}:${PORT}/)\n` +
-    `To stop publishing: tailscale serve --set-path ${PATH_PREFIX} off\n`
+  `\nOpen this, which serves the page and its archives from one origin:\n  ${shared}\n\n` +
+    `Or paste it into the GitHub Pages build's server field (Chrome asks to allow local network\n` +
+    `access the first time):\n  ${shared}\n\n` +
+    `On this machine: http://localhost:${PORT}/\n` +
+    `To stop publishing: tailscale serve --https=${SHARE_PORT} off\n`
 );

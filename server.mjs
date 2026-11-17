@@ -32,6 +32,10 @@ if (!dataArg) {
 const DATA_DIR = resolve(dataArg.replace(/^~/, homedir()));
 const PORT = Number(process.env.PORT || 8088);
 const HOST = process.env.HOST || '0.0.0.0';
+/// The path this app is published under, for a reverse proxy that keeps the prefix (`/mpq/`).
+/// Requests under it are served as if they came from the root, so a page at `/mpq/` calls
+/// `/mpq/api/archives` and the same build still works at `/`.
+const BASE_PATH = (process.env.BASE_PATH || '').replace(/\/+$/, '');
 /// Which origins may read the archives: `*` by default, so a page on GitHub Pages can point here.
 const ALLOW_ORIGIN = process.env.ALLOW_ORIGIN || '*';
 
@@ -42,6 +46,9 @@ const CORS = {
   'access-control-allow-headers': 'Range, Content-Type',
   'access-control-expose-headers': 'Content-Range, Content-Length, Accept-Ranges',
   'access-control-max-age': '86400',
+  // Chrome's Private Network Access gate: a page on a public origin (GitHub Pages) reading a
+  // tailnet or LAN address asks this in the preflight, and refuses to send the request without it.
+  'access-control-allow-private-network': 'true',
   vary: 'Origin',
 };
 
@@ -161,6 +168,9 @@ function serveStatic(res, pathname) {
 
 const server = createServer((req, res) => {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+  if (BASE_PATH && (url.pathname === BASE_PATH || url.pathname.startsWith(`${BASE_PATH}/`))) {
+    url.pathname = url.pathname.slice(BASE_PATH.length) || '/';
+  }
   if (req.method === 'OPTIONS') {
     res.writeHead(204, CORS);
     res.end();
