@@ -72,9 +72,12 @@ folder picker, a synchronous range request for the local server), which keeps th
 
 ## Requirements
 
-- Node.js 20+ and npm, Rust with `wasm32-unknown-unknown`, and `wasm-pack`
-- The benilla checkout, beside this one: `~/dev/benilla`, because `wasm/Cargo.toml` takes its
-  readers from `../../benilla/crates/`
+- Node.js 20+ and npm. The wasm build also needs Rust with `wasm32-unknown-unknown` and
+  `wasm-pack`; without them `npm run build` uses the committed bundle.
+- For the wasm build only, the benilla crates: `wasm/Cargo.toml` pins them by git to
+  `suprsokr/benilla` on branch `mpq-frontend`, one commit over `samwhosung/benilla` whose whole
+  diff is additive (the `Source` trait, the schema registry, and the handles a frontend reaches
+  for). A local checkout can stand in with a `[patch]` entry in `wasm/Cargo.toml`.
 - A browser with WebGL2 and Web Workers; the folder picker additionally needs the File System
   Access API (Chrome/Edge)
 
@@ -87,8 +90,9 @@ npm run build        # wasm + tsc + vite build -> www/dist
 npm run build:web    # tsc + vite build only, using the committed wasm bundle
 ```
 
-`www/vendor/benilla-web/` is the compiled wasm reader, committed because building it needs a
-`benilla` checkout beside this repo. `npm run wasm` regenerates it.
+`www/vendor/benilla-web/` is the compiled wasm reader, committed so the page builds without a
+Rust toolchain (`npm run build` compiles it when `wasm-pack` is present and falls back to the
+bundle when it is not). `npm run wasm` regenerates it.
 
 ## Run
 

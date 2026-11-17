@@ -9,14 +9,16 @@ license = "MIT OR Apache-2.0"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# The readers, straight from the client's own workspace: no re-implementation in the page.
-benilla-bytes = { path = "../../benilla/crates/benilla-bytes" }
-benilla-mpq = { path = "../../benilla/crates/benilla-mpq" }
-benilla-blp = { path = "../../benilla/crates/benilla-blp" }
-benilla-dbc = { path = "../../benilla/crates/benilla-dbc" }
-benilla-m2 = { path = "../../benilla/crates/benilla-m2" }
+# The readers, straight from the client's own crates: no re-implementation in the page. The fork
+# carries one commit on top of `samwhosung/benilla` (`mpq-frontend`) whose whole diff is additive:
+# the `Source` trait, the schema registry, and the handles a frontend reaches for. `rev` pins it.
+benilla-bytes = { git = "https://github.com/suprsokr/benilla", rev = "0226eb1033b2bafbf67bf85a6c893aa90fced8db" }
+benilla-mpq = { git = "https://github.com/suprsokr/benilla", rev = "0226eb1033b2bafbf67bf85a6c893aa90fced8db" }
+benilla-blp = { git = "https://github.com/suprsokr/benilla", rev = "0226eb1033b2bafbf67bf85a6c893aa90fced8db" }
+benilla-dbc = { git = "https://github.com/suprsokr/benilla", rev = "0226eb1033b2bafbf67bf85a6c893aa90fced8db" }
+benilla-m2 = { git = "https://github.com/suprsokr/benilla", rev = "0226eb1033b2bafbf67bf85a6c893aa90fced8db" }
 # `dev` builds benilla's own source path into the binary; the page has no use for it.
-benilla-formats = { path = "../../benilla/crates/benilla-formats", default-features = false }
+benilla-formats = { git = "https://github.com/suprsokr/benilla", rev = "0226eb1033b2bafbf67bf85a6c893aa90fced8db", default-features = false }
 wasm-bindgen = "0.2"
 js-sys = "0.3"
 console_error_panic_hook = "0.1"
