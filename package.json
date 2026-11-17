@@ -5,9 +5,12 @@
   "type": "module",
   "private": true,
   "scripts": {
+    "wasm": "cd wasm && wasm-pack build --target web --release --out-dir ../www/vendor/benilla-web --out-name benilla_web",
     "postinstall": "cd www && npm install",
     "dev": "cd www && npm run dev",
-    "build": "cd www && npm run build",
+    "build": "node tools/build.mjs",
+    "build:web": "cd www && npm run build",
+    "serve": "node server.mjs",
     "preview": "cd www && npm run preview"
   },
   "keywords": [

@@ -1,0 +1,17 @@
+{
+  "name": "benilla-web",
+  "type": "module",
+  "description": "The benilla client's MPQ, BLP, M2 and DBC readers, compiled to WebAssembly",
+  "version": "0.1.0",
+  "license": "MIT OR Apache-2.0",
+  "files": [
+    "benilla_web_bg.wasm",
+    "benilla_web.js",
+    "benilla_web.d.ts"
+  ],
+  "main": "benilla_web.js",
+  "types": "benilla_web.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

@@ -3,3 +3,6 @@
 /www/node_modules
 *.log
 .DS_Store
+# wasm-pack writes its own ignore file into the output folder; the bundle is committed instead.
+/www/vendor/benilla-web/.gitignore
+/wasm/target

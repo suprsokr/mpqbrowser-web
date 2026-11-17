@@ -1,13 +1,12 @@
 /**
  * WebGL2 preview renderer for World of Warcraft M2 models.
  *
- * Parsing, animation, CPU vertex skinning, and batch metadata are done by
- * the vendored `wmvx-wasm` package via the `WmvxModel` class. This module owns
- * the WebGL plumbing: an orbit
- * camera, per-batch textured draw calls with the right blend/cull state,
- * and a `requestAnimationFrame` loop that advances the animation.
+ * Parsing, animation, CPU vertex skinning and batch metadata come from the benilla client's own
+ * readers, compiled to wasm (`benilla-web`). This module owns the WebGL plumbing: an orbit camera,
+ * per-batch textured draw calls with the right blend/cull state, and a `requestAnimationFrame`
+ * loop that advances the animation.
  */
-import initWmvx, { WmvxModel } from '../vendor/wmvx-wasm/wmvx_wasm.js';
+import initBenilla, { M2 } from '../vendor/benilla-web/benilla_web.js';
 
 /** A decoded texture as produced by the worker. */
 export interface DecodedTexture {
@@ -50,28 +49,41 @@ export interface CharacterPayload {
   appearance: CharacterAppearance;
 }
 
+/** What one texture slot resolved to, or why it did not. */
+export interface TextureReport {
+  index: number;
+  filename: string | null;
+  textureType: number;
+  width: number;
+  height: number;
+  status: 'loaded' | 'missing' | 'unsupported';
+  note?: string;
+}
+
 /** Everything needed to build a viewer, produced by the worker. */
 export interface M2Payload {
   m2Bytes: Uint8Array;
-  skinBytes: Uint8Array | null;
+  /** The DBC tables the preview read to build itself. */
+  tables?: string[];
+  /** The model's folder and the `Monster1/2/3` skins the creature tables gave it. */
+  modelDir: string;
+  skins: (string | null)[];
   textures: DecodedTexture[];
+  /** Every texture slot, decoded or not. */
+  textureReport: TextureReport[];
   character: CharacterPayload | null;
   /** Human-readable reason character assembly was skipped/failed, if any. */
   characterError?: string;
 }
 
+/** One draw batch, as `benilla-web`'s `M2.batches()` reports it. */
 interface BatchInfo {
+  index: number;
   submesh: number;
   submeshId: number;
   textureIndex: number;
-  textureComboIndex: number;
-  textureDefIndex: number | null;
   textureType: number;
-  textureFilename: string | null;
   blendMode: number;
-  blendModeName?: string;
-  alphaTested?: boolean;
-  blended?: boolean;
   twoSided: boolean;
   unlit: boolean;
   noDepthWrite: boolean;
@@ -82,15 +94,14 @@ interface BatchInfo {
 export interface AnimationInfo {
   index: number;
   id: number;
-  subId: number;
   duration: number;
-  flags: number;
+  looping: boolean;
 }
 
 let m2InitPromise: Promise<unknown> | null = null;
 function ensureM2Init(): Promise<unknown> {
   if (!m2InitPromise) {
-    m2InitPromise = Promise.resolve(initWmvx());
+    m2InitPromise = Promise.resolve(initBenilla());
   }
   return m2InitPromise;
 }
@@ -251,7 +262,7 @@ const BLEND_MOD2X = 6;
 export class M2Viewer {
   private gl: WebGL2RenderingContext;
   private program: WebGLProgram;
-  private renderer!: WmvxModel;
+  private renderer!: M2;
   private vao!: WebGLVertexArrayObject;
   private posBuffer!: WebGLBuffer;
   private normalBuffer!: WebGLBuffer;
@@ -310,9 +321,10 @@ export class M2Viewer {
     await ensureM2Init();
     const gl = this.gl;
 
-    this.renderer = new WmvxModel(
+    this.renderer = new M2(
       this.payload.m2Bytes,
-      this.payload.skinBytes ?? undefined
+      this.payload.modelDir,
+      this.payload.skins.length ? this.payload.skins : null
     );
     this.batches = this.renderer.batches() as BatchInfo[];
     this.animations = this.renderer.animations() as AnimationInfo[];
@@ -361,16 +373,12 @@ export class M2Viewer {
       this.applyCharacterAppearance(this.payload.character.appearance);
     }
 
-    // Frame the model with the camera.
-    this.frameModel();
-
-    // Default animation.
+    // Default animation, then the first skinned frame, which the camera frames.
     if (this.animations.length > 0) {
       this.renderer.setAnimation(this.animations[0].index);
     }
-
-    // Prime the first skinned frame.
     this.renderer.update(0);
+    this.frameModel();
 
     gl.clearColor(0.07, 0.07, 0.08, 1);
     gl.enable(gl.DEPTH_TEST);
@@ -413,21 +421,40 @@ export class M2Viewer {
     return glTex;
   }
 
-  /** Position the orbit camera to frame the whole model. */
+  /** Position the orbit camera so the posed model fills the canvas. */
   private frameModel(): void {
-    const bb = this.renderer.boundingBox();
-    const min = [bb[0], bb[1], bb[2]];
-    const max = [bb[3], bb[4], bb[5]];
+    // The drawn frame, not the authored bind pose: a T-posed bind box is wider than anything the
+    // animation shows, and framing on it leaves the model small.
+    const vertices = this.renderer.skinnedVertices();
+    const min = [Infinity, Infinity, Infinity];
+    const max = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < vertices.length; i += 3) {
+      for (let k = 0; k < 3; k++) {
+        min[k] = Math.min(min[k], vertices[i + k]);
+        max[k] = Math.max(max[k], vertices[i + k]);
+      }
+    }
+    if (!Number.isFinite(min[0])) {
+      const bb = this.renderer.boundingBox();
+      min.splice(0, 3, bb[0], bb[1], bb[2]);
+      max.splice(0, 3, bb[3], bb[4], bb[5]);
+    }
     this.center = [
       (min[0] + max[0]) / 2,
       (min[1] + max[1]) / 2,
       (min[2] + max[2]) / 2,
     ];
-    const radius = Math.max(
-      0.1,
-      0.5 * Math.hypot(max[0] - min[0], max[1] - min[1], max[2] - min[2])
-    );
-    this.distance = radius * 2.6;
+    // Fit both axes: the vertical field is fixed, the horizontal one follows the canvas.
+    const halfHeight = Math.max(0.05, (max[1] - min[1]) / 2);
+    const halfWidth = Math.max(0.05, Math.max(max[0] - min[0], max[2] - min[2]) / 2);
+    const aspect = this.canvas.clientWidth / Math.max(1, this.canvas.clientHeight);
+    const fovY = (50 * Math.PI) / 180;
+    const fitY = halfHeight / Math.tan(fovY / 2);
+    const fitX = halfWidth / Math.tan(Math.atan(Math.tan(fovY / 2) * aspect));
+    // Pull back by the near half's depth too: the front of the model is closer than its centre,
+    // so it projects larger than the fit plane.
+    const halfDepth = (max[2] - min[2]) / 2;
+    this.distance = Math.max(fitY, fitX) * 1.06 + halfDepth;
   }
 
   private cameraEye(): [number, number, number] {
@@ -614,8 +641,7 @@ export class M2Viewer {
       if (b.textureType === 6 && this.hairTexture) return this.hairTexture;
       if (b.textureType === 8 && this.skinExtraTexture) return this.skinExtraTexture;
     }
-    const textureDefIndex = b.textureDefIndex ?? b.textureIndex;
-    return this.glTextures.get(textureDefIndex) ?? this.whiteTexture;
+    return this.glTextures.get(b.textureIndex) ?? this.whiteTexture;
   }
 
   applyCharacterAppearance(appearance: CharacterAppearance): void {
@@ -634,6 +660,11 @@ export class M2Viewer {
 
   get character(): CharacterPayload | null {
     return this.payload.character;
+  }
+
+  /** How many draw batches bind a texture slot, for the page's texture list. */
+  batchCountForTexture(index: number): number {
+    return this.batches.filter((batch) => batch.textureIndex === index).length;
   }
 
   // --- public control API used by the UI ---

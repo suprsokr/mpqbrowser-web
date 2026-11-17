@@ -6,11 +6,16 @@ export default defineConfig({
   build: {
     target: 'es2022',
   },
-  // wow-mpq-web locates its .wasm file relative to import.meta.url.
-  // If Vite pre-bundles it into node_modules/.vite/deps/, the wasm URL
-  // resolves to a non-existent path and the dev server returns the SPA
-  // fallback HTML. Excluding it keeps the package in its original location.
+  // `server.mjs` answers the archive listings and range reads; the dev server proxies to it so
+  // `/api/archives` works at either origin.
+  server: {
+    proxy: {
+      '/api': 'http://127.0.0.1:8088',
+    },
+  },
+  // The wasm module locates its .wasm beside its own script; keep it out of the pre-bundle so the
+  // URL resolves in dev as well as in a build.
   optimizeDeps: {
-    exclude: ['wow-mpq-web', 'wow-blp-web', 'wow-m2-web'],
+    exclude: ['benilla-web'],
   },
 });

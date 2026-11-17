@@ -1,49 +1,101 @@
-import initMpq, { MpqStreamingArchive } from 'wow-mpq-web';
-import initBlp, { blpToPng, decodeBlp } from 'wow-blp-web';
-import initWmvx, {
-  WmvxModel,
-  LegacyDatabase,
-  assembleLegacyCharacter,
-  composeBodyTexture,
-  decodeBlp as decodeWmvxBlp,
-} from '../vendor/wmvx-wasm/wmvx_wasm.js';
+/**
+ * The archive worker: every format read goes through the benilla client's own code, compiled to
+ * wasm. `benilla-mpq` lists and decompresses the archives, `benilla-blp` decodes textures,
+ * `benilla-formats` builds the M2 submeshes and animation keys, and the DBC tables drive the
+ * character composite.
+ *
+ * The archives stay on disk: the wasm reader calls back for one byte range at a time, answered
+ * here from a `File` (folder picker) or a synchronous range request (the local server).
+ */
+import init, { Client, M2 } from '../vendor/benilla-web/benilla_web.js';
 
-interface ListMessage {
-  type: 'list';
+interface ArchiveRef {
+  name: string;
+  size: number;
+  /** The server's archive endpoint; absent when the page read a picked folder's `File`. */
+  url?: string;
+  file?: File;
+}
+
+interface LoadMessage {
+  type: 'load';
   id: number;
-  file: File;
-  path: string;
+  archives: ArchiveRef[];
 }
 
 interface ReadBlpMessage {
   type: 'readBlp';
   id: number;
-  file: File;
-  path: string;
   name: string;
 }
 
 interface ReadM2Message {
   type: 'readM2';
   id: number;
-  file: File;
-  path: string;
   name: string;
-  archives?: { path: string; file: File }[];
   characterChoice?: CharacterChoice;
 }
 
-type WorkerMessage = ListMessage | ReadBlpMessage | ReadM2Message;
+interface ReadAdtMessage {
+  type: 'readAdt';
+  id: number;
+  name: string;
+}
 
-/** A decoded texture ready to upload to a WebGL texture. */
+interface ReadSoundMessage {
+  type: 'readSound';
+  id: number;
+  name: string;
+}
+
+interface ReadPropsMessage {
+  type: 'readProps';
+  id: number;
+  items: {
+    path: string;
+    position: [number, number, number];
+    rotation: [number, number, number];
+    scale: number;
+  }[];
+}
+
+interface ReadRefsMessage {
+  type: 'readRefs';
+  id: number;
+  path: string;
+}
+
+interface ReadVoiceMessage {
+  type: 'readVoice';
+  id: number;
+  path: string;
+}
+
+interface ReadDbcMessage {
+  type: 'readDbc';
+  id: number;
+  name: string;
+  offset: number;
+  limit: number;
+  filter: string;
+}
+
+type WorkerMessage =
+  | LoadMessage
+  | ReadBlpMessage
+  | ReadM2Message
+  | ReadAdtMessage
+  | ReadSoundMessage
+  | ReadDbcMessage
+  | ReadPropsMessage
+  | ReadRefsMessage
+  | ReadVoiceMessage;
+
 interface DecodedTexture {
-  /** Index into the model's texture list, or -1 for dynamic character slots. */
   index: number;
-  /** Source filename resolved from the model (for diagnostics). */
   filename: string;
   width: number;
   height: number;
-  /** RGBA pixels, width*height*4 bytes. */
   rgba: Uint8Array;
 }
 
@@ -79,136 +131,315 @@ interface CharacterPayload {
   appearance: CharacterAppearance;
 }
 
-/** Payload returned for an M2 preview request. */
+/** A creature's voice and NPC body data, reached from its `CreatureDisplayInfo` rows. */
+export interface CreatureVoicePayload {
+  /** Displays naming the model. */
+  displays: number;
+  /** One entry per `CreatureSoundData` row, deduplicated: 14 kobold displays share one. */
+  voices: {
+    row: number;
+    displays: number[];
+    events: {
+      event: string;
+      kit: number;
+      /** `SoundEntries.Name`, or null for a kit row that names none. */
+      name: string | null;
+      volume?: number;
+      cutoff?: number;
+      /** The kit's variation files, in weight order: the ones a play button can open. */
+      files: string[];
+    }[];
+  }[];
+  /** `CreatureDisplayInfoExtra` looks, deduplicated by appearance, capped at 40 rows. */
+  extras: {
+    id: number;
+    race: number;
+    sex: number;
+    skin: number;
+    face: number;
+    hairStyle: number;
+    hairColor: number;
+    facialHair: number;
+    baked: string | null;
+    /** Worn `ItemDisplayInfo` ids by slot: head, shoulder, shirt, chest, belt, pants, boots,
+     * wrist, gloves, tabard. 0 is empty. */
+    equipment: number[];
+    displays: number[];
+  }[];
+  /** Displays with an `ExtendedDisplayInfoID`, before the 40-row cap. */
+  extraTotal: number;
+}
+
+/** One cell that spells a model path, and the id-reached rows behind it. */
+export interface ModelRefsPayload {
+  /** The path as the cache resolves it (lowercase, `.mdx` as `.m2`). */
+  model: string;
+  hits: { table: string; column: string; row: number; spelling: string; nameOnly: boolean }[];
+  /** Tables read, and tables whose cells carry no types. */
+  tables: number;
+  unreadable: string[];
+  /** `CreatureDisplayInfo` rows naming the matched model rows: the whole per-creature variation. */
+  displays: {
+    id: number;
+    scale: number;
+    alpha: number;
+    skins: (string | null)[];
+    /** Set for a character-model display: the composite keys on race and sex, not skin slots. */
+    race: number | null;
+    sex: number | null;
+  }[];
+  /** `SpellVisualKit` slots firing the matched `SpellVisualEffectName` rows. */
+  kits: { kit: number; effect: number; slot: string }[];
+}
+
+/** What one texture slot of the model resolved to, for the page's texture list. */
+interface TextureReport {
+  /** The slot in the model's texture list, which batches bind by. */
+  index: number;
+  /** The file read, or what the slot is (a composited body, an empty record). */
+  filename: string | null;
+  /** 0 a file, 1 the body atlas, 2 an item's skin, 6 hair, 8 the extra skin. */
+  textureType: number;
+  width: number;
+  height: number;
+  status: 'loaded' | 'missing' | 'unsupported';
+  /** Why a slot did not load, when it did not. */
+  note?: string;
+}
+
 interface M2Payload {
   m2Bytes: Uint8Array;
-  /** Null when the model uses an embedded skin (pre-WotLK). */
-  skinBytes: Uint8Array | null;
+  /** The model's folder, which its skin records are named beside. */
+  modelDir: string;
+  /** The `Monster1/2/3` variations the creature tables give this model. */
+  skins: (string | null)[];
   textures: DecodedTexture[];
+  /** Every texture slot, decoded or not, in slot order. */
+  textureReport: TextureReport[];
   character: CharacterPayload | null;
-  /** Human-readable reason character assembly was skipped/failed, if any. */
   characterError?: string;
+  /** The DBC tables this preview read to build itself. */
+  tables: string[];
 }
 
-interface ListedEntry {
+/** The tables a creature model's preview reads: the display rows and the model rows. */
+const CREATURE_TABLES = ['CreatureDisplayInfo', 'CreatureModelData'];
+/** The tables a character preview reads: the composite, the hair geosets and the dials. */
+const CHARACTER_TABLES = [
+  'ChrRaces',
+  'CharBaseInfo',
+  'CharStartOutfit',
+  'NameGen',
+  'CharSections',
+  'CharHairGeosets',
+  'CharacterFacialHairStyles',
+  'HelmetGeosetVisData',
+];
+
+/** One MTEX entry: the file, and how many chunks of the tile draw it. */
+interface AdtTexture {
   name: string;
-  size: number;
-  compressed_size: number;
-  flags: number;
-  compressed: boolean;
-  encrypted: boolean;
-  single_unit: boolean;
-  exists: boolean;
+  chunks: number;
 }
 
-let initPromise: Promise<[unknown, unknown, unknown]> | null = null;
-
-function ensureInit(): Promise<[unknown, unknown, unknown]> {
-  if (!initPromise) {
-    initPromise = Promise.all([initMpq(), initBlp(), initWmvx()]);
-  }
-  return initPromise;
+/** One MCLQ block: its grid geometry and what fills it. */
+interface AdtLiquid {
+  positions: Float32Array;
+  indices: Uint32Array;
+  kind: string;
 }
 
-if (typeof FileReaderSync === 'undefined') {
-  throw new Error(
-    'FileReaderSync is not available in this Worker context. MPQ browsing requires a browser that supports FileReaderSync in Web Workers.'
-  );
+/** One MCNK: geometry, layer slots, atlas corners, liquids. */
+interface AdtChunk {
+  positions: Float32Array;
+  normals: Float32Array;
+  uvs: Float32Array;
+  indices: Uint32Array;
+  /** Texture-array index per layer slot; `-1` where the chunk has no such layer. */
+  layers: Uint32Array;
+  /** The chunk's corner in the alpha atlas, in texels; null with one layer. */
+  alphaAtlas: Float32Array | null;
+  shadowAtlas: Float32Array | null;
+  liquids: AdtLiquid[];
+  areaId: number;
+  impassable: boolean;
 }
+
+/** A terrain tile as `adt_to_tile_mesh` builds it, plus the layer textures decoded here. */
+interface AdtPayload {
+  textures: AdtTexture[];
+  /** The layer textures that decoded, by MTEX name. */
+  decoded: { name: string; width: number; height: number; rgba: Uint8Array }[];
+  chunks: AdtChunk[];
+  /** `AreaTable` ids under the tile, named by the table. */
+  areas: { id: number; name: string }[];
+  /** Placed models: `placements` is `[x, y, z, rx, ry, rz, scale]` per instance. */
+  doodads: PlacedModel[];
+  wmos: PlacedModel[];
+  /** The DBC tables this preview read to build itself. */
+  tables: string[];
+  /** RGBA `alphaAtlasSide`², one 64-texel tile per chunk that blends more than one layer. */
+  alphaAtlas: Uint8Array;
+  alphaAtlasSide: number;
+  /** One byte per texel, 255 shadowed; a tile per chunk with an MCSH map. */
+  shadowAtlas: Uint8Array;
+  shadowAtlasSide: number;
+  vertexCount: number;
+  triangleCount: number;
+}
+
+/** One page of a DBC, column names from the schemas benilla ships. */
+interface DbcSheet {
+  path: string;
+  columns: string[];
+  rows: (number | string | null)[][];
+  /** Records in the file. */
+  total: number;
+  /** Records the filter kept. */
+  matched: number;
+  offset: number;
+  /** The schema's table name, or null when no schema fits the file. */
+  schema: string | null;
+  keyIndex: number | null;
+  /** Per column: u32, i32, f32 or string. */
+  types?: string[];
+  note?: string;
+  recordCount: number;
+  fieldCount: number;
+}
+
+/** A placed model and every placement of it in a tile. */
+interface PlacedModel {
+  model: string;
+  count: number;
+  placements: Float32Array[];
+}
+
+/** Doodads and buildings baked into world space, one entry per merged batch. */
+interface PropsPayload {
+  textures: { name: string; width: number; height: number; rgba: Uint8Array }[];
+  batches: {
+    model: string;
+    kind: 'doodad' | 'building';
+    /** Index into `textures`; -1 for a batch with no texture. */
+    texture: number;
+    blend: number;
+    twoSided: boolean;
+    positions: Float32Array;
+    normals: Float32Array;
+    uvs: Float32Array;
+    indices: Uint32Array;
+  }[];
+  failed: { model: string; error: string }[];
+  skipped: { model: string; count: number }[];
+  missingTextures: string[];
+  vertexCount: number;
+}
+
+/** A sound file and the `SoundEntries` kits that play it. */
+interface SoundPayload {
+  path: string;
+  bytes: Uint8Array;
+  /** The DBC tables this preview read. */
+  tables: string[];
+  kits: {
+    id: number;
+    soundType: number;
+    name: string;
+    volume: number;
+    minDistance: number;
+    distanceCutoff: number;
+  }[];
+}
+
+interface Listing {
+  names: string[];
+  archive: Uint16Array;
+  size: Uint32Array;
+  compressed: Uint32Array;
+  flags: Uint32Array;
+}
+
+let client: Client | null = null;
+let archives: ArchiveRef[] = [];
+let initPromise: Promise<unknown> | null = null;
 
 function log(...args: unknown[]): void {
   // eslint-disable-next-line no-console
   console.log('[mpqbrowser worker]', ...args);
 }
 
-/**
- * Synchronous file read using FileReaderSync inside a Web Worker.
- *
- * This runs on the worker thread, so it never blocks the main UI thread.
- */
-function readRange(file: File, offset: number, length: number): Uint8Array {
-  if (length < 0) {
-    throw new Error(`Negative read length: ${length}`);
+/** A synchronous range read, the shape `benilla_mpq::Source` asks for inside wasm. */
+function readRange(id: number, offset: number, length: number): Uint8Array {
+  const archive = archives[id];
+  if (!archive) {
+    throw new Error(`read from unknown archive ${id}`);
   }
-  if (length === 0) {
+  if (length <= 0) {
     return new Uint8Array(0);
   }
-  if (offset < 0 || offset > file.size) {
-    throw new Error(
-      `Read offset out of range: offset=${offset}, fileSize=${file.size}`
-    );
+  const end = Math.min(offset + length, archive.size);
+
+  if (archive.file) {
+    const reader = new FileReaderSync();
+    const buffer = reader.readAsArrayBuffer(archive.file.slice(offset, end));
+    return new Uint8Array(buffer);
   }
 
-  try {
-    const reader = new FileReaderSync();
-    const end = Math.min(offset + length, file.size);
-    const blob = file.slice(offset, end);
-    const buffer = reader.readAsArrayBuffer(blob);
-    if (!(buffer instanceof ArrayBuffer)) {
-      throw new Error(
-        `FileReaderSync returned unexpected type: ${typeof buffer}`
-      );
-    }
-    return new Uint8Array(buffer);
-  } catch (err) {
-    log('readRange failed', { offset, length, fileSize: file.size, err });
-    throw err;
+  // A worker may issue a synchronous request, which is what lets wasm's reader stay
+  // synchronous while the bytes stay on the server's disk.
+  const xhr = new XMLHttpRequest();
+  xhr.open('GET', `${archive.url}?offset=${offset}&length=${end - offset}`, false);
+  xhr.responseType = 'arraybuffer';
+  xhr.send();
+  if (xhr.status !== 206 && xhr.status !== 200) {
+    throw new Error(`${archive.name}: range ${offset}+${end - offset} answered ${xhr.status}`);
   }
+  return new Uint8Array(xhr.response as ArrayBuffer);
+}
+
+async function ensureClient(refs: ArchiveRef[]): Promise<Client> {
+  if (!initPromise) {
+    initPromise = init();
+  }
+  await initPromise;
+  archives = refs;
+  if (!client) {
+    const names = refs.map((a) => a.name);
+    const sizes = refs.map((a) => a.size);
+    client = new Client(names, new Float64Array(sizes), readRange);
+  }
+  return client;
 }
 
 function isBlpPath(name: string): boolean {
   return name.toLowerCase().endsWith('.blp');
 }
 
-function isM2Path(name: string): boolean {
-  return name.toLowerCase().endsWith('.m2');
-}
-
-async function readBlp(file: File, path: string, name: string): Promise<Uint8Array> {
-  const archive = new MpqStreamingArchive(file, readRange);
-  try {
-    const blpBytes = archive.readFile(name);
-    log('readBlp', { path, name, size: blpBytes.length });
-    return blpToPng(blpBytes);
-  } finally {
-    archive.free();
+/** PNG-encode RGBA pixels with the worker's own canvas, so the page gets an <img> source. */
+async function rgbaToPng(width: number, height: number, rgba: Uint8Array): Promise<Uint8Array> {
+  const canvas = new OffscreenCanvas(width, height);
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error('OffscreenCanvas 2d context unavailable');
   }
+  const pixels = new Uint8ClampedArray(rgba.length);
+  pixels.set(rgba);
+  ctx.putImageData(new ImageData(pixels, width, height), 0, 0);
+  const blob = await canvas.convertToBlob({ type: 'image/png' });
+  return new Uint8Array(await blob.arrayBuffer());
 }
 
-/** Normalize an MPQ path to backslashes and lowercase for lookups. */
 function normalizePath(name: string): string {
   return name.replace(/\//g, '\\');
-}
-
-/** Basename (lowercased) of an MPQ/OS path, split on either separator. */
-function baseName(name: string): string {
-  return name.split(/[\\/]/).pop()?.toLowerCase() ?? name.toLowerCase();
-}
-
-/** Higher number = higher patch priority when resolving cross-MPQ assets. */
-function patchPriority(path: string): number {
-  const base = path.split(/[\\/]/).pop()?.toLowerCase() ?? path.toLowerCase();
-  if (/^patch(?:-|_|\.)/.test(base)) return 100;
-  if (base === 'texture.mpq') return 40;
-  if (base === 'model.mpq') return 30;
-  if (base === 'dbc.mpq') return 20;
-  if (base === 'misc.mpq') return 10;
-  if (base === 'base.mpq') return 0;
-  return 50;
-}
-
-/**
- * Derive the external `.skin` path for a WotLK+ model. WoW names the
- * primary skin `<model>00.skin` next to the `.m2`.
- */
-function skinPathFor(m2Name: string): string {
-  return m2Name.replace(/\.m2$/i, '00.skin');
 }
 
 function inferLegacyCharacter(name: string): { raceId: number; gender: number } | null {
   const n = normalizePath(name).toLowerCase();
   const m = n.match(/^character\\([^\\]+)\\(male|female)\\/);
-  if (!m) return null;
+  if (!m) {
+    return null;
+  }
   const race: Record<string, number> = {
     human: 1,
     orc: 2,
@@ -224,13 +455,14 @@ function inferLegacyCharacter(name: string): { raceId: number; gender: number } 
     draenei: 11,
   };
   const raceId = race[m[1]];
-  if (!raceId) return null;
+  if (!raceId) {
+    return null;
+  }
   return { raceId, gender: m[2] === 'female' ? 1 : 0 };
 }
 
-
 function choiceFromOptions(options: CharacterChoiceOptions): CharacterChoice {
-  const pick = (xs: number[], fallback = 0) => xs.length ? xs[0] : fallback;
+  const pick = (xs: number[], fallback = 0) => (xs.length ? xs[0] : fallback);
   return {
     skin: pick(options.skins),
     face: pick(options.faces),
@@ -241,315 +473,366 @@ function choiceFromOptions(options: CharacterChoiceOptions): CharacterChoice {
   };
 }
 
-function decodeLayer(readAny: (name: string) => Uint8Array, req: { texture: string; region?: string | null; layer: number }) {
-  try {
-    const decoded = decodeWmvxBlp(readAny(req.texture), 0) as { width: number; height: number; rgba: Uint8Array };
-    return {
-      rgba: decoded.rgba,
-      width: decoded.width,
-      height: decoded.height,
-      region: req.region ?? null,
-      layer: req.layer ?? 0,
-    };
-  } catch (err) {
-    // A single missing body-layer BLP must not sink the whole character.
-    // Skip it (return null) and let compositing use the remaining layers.
-    log('body layer decode failed (skipping)', { texture: req.texture, err: String(err) });
-    return null;
-  }
-}
-
-function decodeTexture(readAny: (name: string) => Uint8Array, filename: string, index: number): DecodedTexture | null {
-  try {
-    const decoded = decodeWmvxBlp(readAny(filename), 0) as { width: number; height: number; rgba: Uint8Array };
-    return { index, filename, width: decoded.width, height: decoded.height, rgba: decoded.rgba };
-  } catch (err) {
-    log('replaceable texture decode failed (skipping)', { filename, err: String(err) });
-    return null;
-  }
-}
-
-function assembleCharacterAppearance(
-  model: WmvxModel,
-  db: LegacyDatabase,
-  readAny: (name: string) => Uint8Array,
+function buildCharacter(
+  source: Client,
   raceId: number,
   gender: number,
-  options: CharacterChoiceOptions,
-  choice: CharacterChoice,
-): CharacterAppearance {
-  const resolved = db.resolve(raceId, gender, choice);
-  try {
-    const assembled = assembleLegacyCharacter(model, resolved, {
-      showHair: true,
-      showUnderwear: true,
-      showFacialHair: true,
-    }) as {
-      bodyLayers: { texture: string; region?: string | null; layer: number }[];
-      replaceableTextures: { hair: string | null; skinExtra: string | null };
-      visibleGeosets: number[];
-    };
-    const layers = assembled.bodyLayers
-      .map((req) => decodeLayer(readAny, req))
-      .filter((l): l is NonNullable<typeof l> => l !== null);
-    const body = composeBodyTexture(layers) as { width: number; height: number; rgba: Uint8Array };
-    return {
-      choice,
-      visibleGeosets: assembled.visibleGeosets,
-      body: { index: -1, filename: '(composited body)', width: body.width, height: body.height, rgba: body.rgba },
-      hair: assembled.replaceableTextures.hair ? decodeTexture(readAny, assembled.replaceableTextures.hair, -2) : null,
-      skinExtra: assembled.replaceableTextures.skinExtra ? decodeTexture(readAny, assembled.replaceableTextures.skinExtra, -3) : null,
-    };
-  } finally {
-    resolved.free();
+  requested?: CharacterChoice
+): CharacterPayload {
+  const options = source.characterOptions(raceId, gender) as CharacterChoiceOptions;
+  const choice = requested ?? choiceFromOptions(options);
+  const composed = source.character(raceId, gender, choice) as {
+    choice: CharacterChoice;
+    visibleGeosets: Uint16Array;
+    body: { width: number; height: number; rgba: Uint8Array } | null;
+    hair: { filename: string; width: number; height: number; rgba: Uint8Array } | null;
+    skinExtra: { filename: string; width: number; height: number; rgba: Uint8Array } | null;
+  };
+  if (!composed.body) {
+    throw new Error(`race ${raceId} sex ${gender} has no base skin row`);
   }
+  return {
+    raceId,
+    gender,
+    options,
+    appearance: {
+      choice: composed.choice,
+      visibleGeosets: Array.from(composed.visibleGeosets),
+      body: {
+        index: -1,
+        filename: '(composited body)',
+        width: composed.body.width,
+        height: composed.body.height,
+        rgba: composed.body.rgba,
+      },
+      hair: composed.hair
+        ? {
+            index: -2,
+            filename: composed.hair.filename,
+            width: composed.hair.width,
+            height: composed.hair.height,
+            rgba: composed.hair.rgba,
+          }
+        : null,
+      skinExtra: composed.skinExtra
+        ? {
+            index: -3,
+            filename: composed.skinExtra.filename,
+            width: composed.skinExtra.width,
+            height: composed.skinExtra.height,
+            rgba: composed.skinExtra.rgba,
+          }
+        : null,
+    },
+  };
 }
 
-function tryBuildLegacyCharacter(
-  model: WmvxModel,
-  readAny: (name: string) => Uint8Array,
-  name: string,
-  requestedChoice?: CharacterChoice,
-): { character: CharacterPayload | null; error?: string } {
-  const inferred = inferLegacyCharacter(name);
-  if (!inferred) {
-    return { character: null, error: `not a legacy character path (expected Character\\<Race>\\<Male|Female>\\...): ${name}` };
-  }
-  try {
-    const db = new LegacyDatabase(
-      readAny('DBFilesClient\\CharSections.dbc'),
-      readAny('DBFilesClient\\CharHairGeosets.dbc'),
-      readAny('DBFilesClient\\CharacterFacialHairStyles.dbc'),
-      readAny('DBFilesClient\\ChrRaces.dbc'),
-    );
-    try {
-      const options = db.legacyChoices(inferred.raceId, inferred.gender) as CharacterChoiceOptions;
-      const choice = requestedChoice ?? choiceFromOptions(options);
-      const appearance = assembleCharacterAppearance(model, db, readAny, inferred.raceId, inferred.gender, options, choice);
-      return { character: { raceId: inferred.raceId, gender: inferred.gender, options, appearance } };
-    } finally {
-      db.free();
-    }
-  } catch (err) {
-    const error = String(err);
-    log('legacy character assembly unavailable', { name, err: error });
-    return { character: null, error };
-  }
+function modelDir(name: string): string {
+  const cut = name.replace(/\//g, '\\').lastIndexOf('\\');
+  return cut <= 0 ? '' : name.slice(0, cut);
 }
 
-/**
- * Read an M2 model plus everything needed to render it: the external
- * `.skin` (if present) and the decoded BLP textures it references.
- */
-async function readM2(
-  file: File,
-  path: string,
-  name: string,
-  archivesInput?: { path: string; file: File }[],
-  requestedChoice?: CharacterChoice,
-): Promise<M2Payload> {
-  const archiveInputs = archivesInput?.length ? archivesInput : [{ path, file }];
-  const archives = archiveInputs.map((a) => ({
-    path: a.path,
-    archive: new MpqStreamingArchive(a.file, readRange),
-  }));
-  const ordered = [...archives].sort((a, b) => patchPriority(b.path) - patchPriority(a.path));
-
-  // Lazily-built basename -> full MPQ path index per archive, so lookups can
-  // fall back to matching by filename when the exact directory layout differs
-  // between MPQ sets (e.g. DBCs under a different folder/locale).
-  const listingIndex = new Map<typeof ordered[number], Map<string, string>>();
-  const indexFor = (candidate: typeof ordered[number]): Map<string, string> => {
-    let idx = listingIndex.get(candidate);
-    if (idx) return idx;
-    idx = new Map();
-    try {
-      for (const entry of candidate.archive.list() as ListedEntry[]) {
-        const full = (entry as { name: string }).name;
-        if (!full) continue;
-        const key = baseName(full);
-        if (!idx.has(key)) idx.set(key, full);
-      }
-    } catch (err) {
-      log('archive listing failed for fallback lookup', { path: candidate.path, err: String(err) });
-    }
-    listingIndex.set(candidate, idx);
-    return idx;
-  };
-
-  const readAny = (assetName: string): Uint8Array => {
-    const norm = normalizePath(assetName);
-    let lastErr: unknown = null;
-    // Fast path: exact (case-insensitive hashed) lookup.
-    for (const candidate of ordered) {
-      try {
-        return candidate.archive.readFile(norm) as Uint8Array;
-      } catch (err) {
-        lastErr = err;
-      }
-    }
-    // Fallback: match by basename against each archive's listing.
-    const wanted = baseName(assetName);
-    for (const candidate of ordered) {
-      const full = indexFor(candidate).get(wanted);
-      if (!full) continue;
-      try {
-        return candidate.archive.readFile(full) as Uint8Array;
-      } catch (err) {
-        lastErr = err;
-      }
-    }
-    throw lastErr ?? new Error(`File not found: ${norm}`);
-  };
-
+function readM2(source: Client, name: string, requestedChoice?: CharacterChoice): M2Payload {
+  const m2Bytes = source.readFile(name);
+  const dir = modelDir(name);
+  const isCharacter = inferLegacyCharacter(name) !== null;
+  // A creature's M2 leaves `Monster1/2/3` unfilled; the creature tables name its skins.
+  const skins = isCharacter ? [] : (source.creatureSkins(name) as (string | null)[]);
+  const model = new M2(m2Bytes, dir, skins.length ? skins : null);
+  let character: CharacterPayload | null = null;
+  let characterError: string | undefined;
+  const textures: DecodedTexture[] = [];
+  const textureReport: TextureReport[] = [];
   try {
-    const m2Bytes = readAny(name);
-    log('readM2', { path, name, size: m2Bytes.length, archives: archives.length });
-
-    // Try to load the external .skin. Missing skins are fine (older
-    // models embed their skin data in the .m2 itself).
-    let skinBytes: Uint8Array | null = null;
-    const skinName = normalizePath(skinPathFor(name));
-    try {
-      skinBytes = readAny(skinName);
-      log('readM2 skin', { skinName, size: skinBytes.length });
-    } catch {
-      log('readM2 no external skin, using embedded', { skinName });
-      skinBytes = null;
-    }
-
-    // Parse metadata with wmvx-wasm to discover texture definitions. The renderer
-    // binds render passes by textureDefIndex, not the legacy pass texture unit.
-    const model = new WmvxModel(m2Bytes, skinBytes);
-    let textureDefs: { textureType: number; flags: number; filename: string }[];
-    let character: CharacterPayload | null = null;
-    let characterError: string | undefined;
-    try {
-      textureDefs = model.textures() as typeof textureDefs;
-      const built = tryBuildLegacyCharacter(model, readAny, name, requestedChoice);
-      character = built.character;
-      characterError = built.error;
-    } finally {
-      model.free();
-    }
-
-    // Decode each hardcoded texture reference. Missing/replaceable textures are
-    // skipped; the renderer falls back to a placeholder for unresolved indices.
-    const textures: DecodedTexture[] = [];
-    textureDefs.forEach((tex, index) => {
-      const filename = (tex.filename || '').trim();
-      if (!filename) {
-        return;
-      }
+    const defs = model.textures() as { index: number; filename: string | null; textureType: number }[];
+    const inferred = inferLegacyCharacter(name);
+    if (inferred) {
       try {
-        const blpBytes = readAny(filename);
-        const decoded = decodeBlp(blpBytes) as {
-          width: number;
-          height: number;
-          rgba: Uint8Array;
-        };
-        textures.push({
-          index,
+        character = buildCharacter(source, inferred.raceId, inferred.gender, requestedChoice);
+      } catch (err) {
+        characterError = String(err);
+        log('character assembly failed', { name, err: characterError });
+      }
+    }
+    // A creature, doodad or spell model has no character dials at all: that is not an error worth
+    // saying, so only a character path that failed to compose reports one.
+
+    for (const def of defs) {
+      const resolved = resolveModelTexture(source, def, character);
+      if (resolved.pixels) {
+        const { filename, width, height, rgba } = resolved.pixels;
+        textures.push({ index: def.index, filename, width, height, rgba });
+        textureReport.push({
+          index: def.index,
           filename,
-          width: decoded.width,
-          height: decoded.height,
-          rgba: decoded.rgba,
+          textureType: def.textureType,
+          width,
+          height,
+          status: 'loaded',
         });
-      } catch (err) {
-        log('readM2 texture decode failed', { filename, err: String(err) });
+      } else {
+        textureReport.push({
+          index: def.index,
+          filename: def.filename,
+          textureType: def.textureType,
+          width: 0,
+          height: 0,
+          status: resolved.status,
+          note: resolved.note,
+        });
       }
-    });
-
-    return { m2Bytes, skinBytes, textures, character, characterError };
-  } finally {
-    for (const a of archives) {
-      a.archive.free();
     }
+  } finally {
+    model.free();
+  }
+  return {
+    m2Bytes,
+    modelDir: dir,
+    skins,
+    textures,
+    textureReport,
+    character,
+    characterError,
+    tables: character ? CHARACTER_TABLES : CREATURE_TABLES,
+  };
+}
+
+/** What a texture slot binds: a decoded image, or why there is none. */
+function resolveModelTexture(
+  source: Client,
+  def: { index: number; filename: string | null; textureType: number },
+  character: CharacterPayload | null
+): {
+  pixels?: { filename: string; width: number; height: number; rgba: Uint8Array };
+  status: 'missing' | 'unsupported';
+  note: string;
+} {
+  // A slot the client fills from the character composite or an item.
+  if (def.textureType === 1) {
+    const body = character?.appearance.body;
+    return body
+      ? { pixels: { filename: body.filename, width: body.width, height: body.height, rgba: body.rgba }, status: 'missing', note: '' }
+      : { status: 'missing', note: 'the body composite needs a character model and its DBC tables' };
+  }
+  if (def.textureType === 6) {
+    const hair = character?.appearance.hair;
+    return hair
+      ? { pixels: { filename: hair.filename, width: hair.width, height: hair.height, rgba: hair.rgba }, status: 'missing', note: '' }
+      : { status: 'missing', note: 'this look has no hair texture' };
+  }
+  if (def.textureType === 8) {
+    const extra = character?.appearance.skinExtra;
+    return extra
+      ? { pixels: { filename: extra.filename, width: extra.width, height: extra.height, rgba: extra.rgba }, status: 'missing', note: '' }
+      : { status: 'missing', note: 'this race has no extra skin (fur) texture' };
+  }
+  if (def.textureType === 2) {
+    return { status: 'unsupported', note: "an item's texture, which the client binds to a worn object" };
+  }
+  if (!def.filename) {
+    return { status: 'missing', note: 'the model names no file and no display supplies one' };
+  }
+  try {
+    const pixels = source.decodeBlp(source.readFile(def.filename)) as {
+      width: number;
+      height: number;
+      rgba: Uint8Array;
+    };
+    return {
+      pixels: { filename: def.filename, width: pixels.width, height: pixels.height, rgba: pixels.rgba },
+      status: 'missing',
+      note: '',
+    };
+  } catch (err) {
+    log('texture decode failed', { filename: def.filename, err: String(err) });
+    return { status: 'missing', note: String(err) };
   }
 }
 
-/** Collect transferable ArrayBuffers from an M2 payload for zero-copy postMessage. */
-function m2Transferables(payload: M2Payload): Transferable[] {
-  const transfers: Transferable[] = [payload.m2Bytes.buffer];
-  if (payload.skinBytes) {
-    transfers.push(payload.skinBytes.buffer);
+/** A tile's payload, with every layer texture decoded through the chain's BLP reader. */
+function readAdt(source: Client, name: string): AdtPayload {
+  const tile = source.adt(name) as AdtPayload;
+  const decoded: { name: string; width: number; height: number; rgba: Uint8Array }[] = [];
+  for (const texture of tile.textures) {
+    const path = texture.name.toLowerCase().endsWith('.blp') ? texture.name : `${texture.name}.blp`;
+    try {
+      const pixels = source.decodeBlp(source.readFile(path)) as {
+        width: number;
+        height: number;
+        rgba: Uint8Array;
+      };
+      decoded.push({ name: texture.name, width: pixels.width, height: pixels.height, rgba: pixels.rgba });
+    } catch (err) {
+      log('terrain texture decode failed', { name: texture.name, err: String(err) });
+    }
   }
+  tile.decoded = decoded;
+  // Zone ids are named through `AreaTable`, which the tile call loads.
+  tile.tables = ['AreaTable'];
+  return tile;
+}
+
+/** A sound file's bytes, and the kits whose variations name it. */
+function readSound(source: Client, name: string): SoundPayload {
+  const bytes = source.readFile(name);
+  const kits = source.soundKits(name) as SoundPayload['kits'];
+  return { path: name, bytes, kits, tables: ['SoundEntries'] };
+}
+
+function adtTransferables(payload: AdtPayload): Transferable[] {
+  const buffers = new Set<ArrayBuffer>();
+  const add = (bytes: ArrayBufferView | null | undefined) => {
+    if (bytes) buffers.add(bytes.buffer as ArrayBuffer);
+  };
+  add(payload.alphaAtlas);
+  add(payload.shadowAtlas);
+  for (const texture of payload.decoded) add(texture.rgba);
+  for (const chunk of payload.chunks) {
+    add(chunk.positions);
+    add(chunk.normals);
+    add(chunk.uvs);
+    add(chunk.indices);
+    add(chunk.layers);
+    add(chunk.alphaAtlas);
+    add(chunk.shadowAtlas);
+    for (const liquid of chunk.liquids) {
+      add(liquid.positions);
+      add(liquid.indices);
+    }
+  }
+  return [...buffers];
+}
+
+function m2Transferables(payload: M2Payload): Transferable[] {
+  // The composited body, hair and extra skin are both a texture a batch binds and the character's
+  // appearance, so one buffer can be named twice; postMessage refuses a duplicate.
+  const buffers = new Set<ArrayBuffer>();
+  const add = (bytes: Uint8Array) => buffers.add(bytes.buffer as ArrayBuffer);
+  add(payload.m2Bytes);
   for (const tex of payload.textures) {
-    transfers.push(tex.rgba.buffer);
+    add(tex.rgba);
   }
   if (payload.character) {
-    transfers.push(payload.character.appearance.body.rgba.buffer);
-    if (payload.character.appearance.hair) transfers.push(payload.character.appearance.hair.rgba.buffer);
-    if (payload.character.appearance.skinExtra) transfers.push(payload.character.appearance.skinExtra.rgba.buffer);
+    add(payload.character.appearance.body.rgba);
+    if (payload.character.appearance.hair) {
+      add(payload.character.appearance.hair.rgba);
+    }
+    if (payload.character.appearance.skinExtra) {
+      add(payload.character.appearance.skinExtra.rgba);
+    }
   }
-  return transfers;
+  return [...buffers];
 }
 
 self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
   const msg = event.data;
 
-  if (msg.type === 'list') {
-    log('listing', msg.file.name, 'size', msg.file.size);
-
-    try {
-      await ensureInit();
-      const archive = new MpqStreamingArchive(msg.file, readRange);
-      const entries = (archive.list() as ListedEntry[]).map((entry) => ({
-        ...entry,
-        archive: msg.path,
-      }));
-      archive.free();
-      self.postMessage({ type: 'listResult', id: msg.id, entries });
-    } catch (err) {
-      log('listing failed', msg.file.name, err);
-      self.postMessage({ type: 'error', id: msg.id, error: String(err) });
-    }
-    return;
-  }
-
-  if (msg.type === 'readBlp') {
-    if (!isBlpPath(msg.name)) {
+  try {
+    if (msg.type === 'load') {
+      const source = await ensureClient(msg.archives);
+      const listing = source.list() as Listing;
       self.postMessage({
-        type: 'error',
+        type: 'loadResult',
         id: msg.id,
-        error: `Not a BLP file: ${msg.name}`,
+        archives: source.archives(),
+        listing,
       });
       return;
     }
 
-    try {
-      await ensureInit();
-      const png = await readBlp(msg.file, msg.path, msg.name);
+    if (msg.type === 'readBlp') {
+      if (!isBlpPath(msg.name)) {
+        throw new Error(`not a BLP file: ${msg.name}`);
+      }
+      const source = await ensureClient(archives);
+      const pixels = source.decodeBlp(source.readFile(msg.name)) as {
+        width: number;
+        height: number;
+        rgba: Uint8Array;
+      };
+      const png = await rgbaToPng(pixels.width, pixels.height, pixels.rgba);
       self.postMessage({ type: 'blpResult', id: msg.id, png });
-    } catch (err) {
-      log('readBlp failed', msg.path, msg.name, err);
-      self.postMessage({ type: 'error', id: msg.id, error: String(err) });
-    }
-    return;
-  }
-
-  if (msg.type === 'readM2') {
-    if (!isM2Path(msg.name)) {
-      self.postMessage({
-        type: 'error',
-        id: msg.id,
-        error: `Not an M2 file: ${msg.name}`,
-      });
       return;
     }
 
-    try {
-      await ensureInit();
-      const payload = await readM2(msg.file, msg.path, msg.name, msg.archives, msg.characterChoice);
-      self.postMessage(
-        { type: 'm2Result', id: msg.id, payload },
-        m2Transferables(payload)
-      );
-    } catch (err) {
-      log('readM2 failed', msg.path, msg.name, err);
-      self.postMessage({ type: 'error', id: msg.id, error: String(err) });
+    if (msg.type === 'readM2') {
+      if (!msg.name.toLowerCase().endsWith('.m2')) {
+        throw new Error(`not an M2 file: ${msg.name}`);
+      }
+      const source = await ensureClient(archives);
+      const payload = readM2(source, msg.name, msg.characterChoice);
+      self.postMessage({ type: 'm2Result', id: msg.id, payload }, m2Transferables(payload));
+      return;
     }
-    return;
+
+    if (msg.type === 'readAdt') {
+      if (!msg.name.toLowerCase().endsWith('.adt')) {
+        throw new Error(`not an ADT file: ${msg.name}`);
+      }
+      const source = await ensureClient(archives);
+      const payload = readAdt(source, msg.name);
+      self.postMessage({ type: 'adtResult', id: msg.id, payload }, adtTransferables(payload));
+      return;
+    }
+
+    if (msg.type === 'readProps') {
+      const source = await ensureClient(archives);
+      const payload = source.props(msg.items) as PropsPayload;
+      const buffers = new Set<ArrayBuffer>();
+      const add = (bytes: ArrayBufferView) => buffers.add(bytes.buffer as ArrayBuffer);
+      for (const texture of payload.textures) add(texture.rgba);
+      for (const batch of payload.batches) {
+        add(batch.positions);
+        add(batch.normals);
+        add(batch.uvs);
+        add(batch.indices);
+      }
+      self.postMessage({ type: 'propsResult', id: msg.id, payload }, [...buffers]);
+      return;
+    }
+
+    if (msg.type === 'readVoice') {
+      const source = await ensureClient(archives);
+      const payload = source.creatureVoice(msg.path) as CreatureVoicePayload;
+      self.postMessage({ type: 'voiceResult', id: msg.id, payload });
+      return;
+    }
+
+    if (msg.type === 'readRefs') {
+      const source = await ensureClient(archives);
+      const payload = source.modelReferences(msg.path) as ModelRefsPayload;
+      self.postMessage({ type: 'refsResult', id: msg.id, payload });
+      return;
+    }
+
+    if (msg.type === 'readDbc') {
+      const source = await ensureClient(archives);
+      const sheet = source.dbc(
+        msg.name,
+        msg.offset,
+        msg.limit,
+        msg.filter
+      ) as DbcSheet;
+      self.postMessage({ type: 'dbcResult', id: msg.id, payload: sheet });
+      return;
+    }
+
+    if (msg.type === 'readSound') {
+      const lower = msg.name.toLowerCase();
+      if (!lower.endsWith('.wav') && !lower.endsWith('.mp3')) {
+        throw new Error(`not a sound file: ${msg.name}`);
+      }
+      const source = await ensureClient(archives);
+      const payload = readSound(source, msg.name);
+      self.postMessage(
+        { type: 'soundResult', id: msg.id, payload },
+        [payload.bytes.buffer as ArrayBuffer]
+      );
+      return;
+    }
+  } catch (err) {
+    log(`${msg.type} failed`, err);
+    self.postMessage({ type: 'error', id: msg.id, error: String(err) });
   }
 };
 

@@ -61,6 +61,10 @@
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
         word-break: break-all;
       }
+      /* The rows run by path, so most rows repeat the archive above them: dim the repeats. */
+      td.archive.repeat {
+        color: #6b7280;
+      }
       .num {
         text-align: right;
         font-variant-numeric: tabular-nums;
@@ -75,9 +79,15 @@
       .flag.enc { background: #7c3aed; }
       .flag.comp { background: #059669; }
       .flag.single { background: #b45309; }
+      tr.adt-preview-trigger td,
+      tr.dbc-preview-trigger td,
+      tr.sound-preview-trigger td,
       tr.blp-preview-trigger td {
         cursor: pointer;
       }
+      tr.adt-preview-trigger:hover td,
+      tr.dbc-preview-trigger:hover td,
+      tr.sound-preview-trigger:hover td,
       tr.blp-preview-trigger:hover td {
         background: #1f3a56;
       }
@@ -166,20 +176,390 @@
         font-size: 0.8rem;
         color: #888;
       }
+      .m2-textures {
+        margin-top: 0.6rem;
+        border: 1px solid #333;
+        border-radius: 0.25rem;
+        background: #151515;
+        padding: 0.45rem 0.6rem;
+        max-width: 720px;
+      }
+      .m2-textures summary {
+        cursor: pointer;
+        font-size: 0.85rem;
+        color: #ccc;
+      }
+      .m2-texture-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.4rem;
+        margin-top: 0.55rem;
+        max-height: 320px;
+        overflow: auto;
+      }
+      .m2-texture-row {
+        display: flex;
+        gap: 0.6rem;
+        align-items: center;
+      }
+      .m2-texture-row canvas,
+      .m2-texture-empty {
+        flex: none;
+        width: 48px;
+        height: 48px;
+        border: 1px solid #333;
+        background: #000;
+      }
+      .m2-texture-row canvas {
+        image-rendering: pixelated;
+      }
+      .m2-texture-empty {
+        display: grid;
+        place-items: center;
+        border-style: dashed;
+        border-color: #4b5563;
+        color: #6b7280;
+        font-size: 1.1rem;
+      }
+      .m2-texture-meta {
+        min-width: 0;
+      }
+      .m2-texture-name {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.78rem;
+        color: #ddd;
+        word-break: break-all;
+      }
+      .m2-texture-detail {
+        font-size: 0.72rem;
+        color: #888;
+        word-break: break-word;
+      }
+      .m2-texture-row-missing .m2-texture-name {
+        color: #f59e0b;
+      }
+      .dbc-panel {
+        padding: 0.5rem;
+      }
+      .dbc-controls {
+        display: flex;
+        gap: 0.6rem;
+        align-items: center;
+        flex-wrap: wrap;
+        margin-bottom: 0.4rem;
+      }
+      .dbc-filter {
+        flex: 1 1 240px;
+        min-width: 180px;
+        padding: 0.35rem 0.5rem;
+        background: #1a1a1a;
+        color: #eee;
+        border: 1px solid #444;
+        border-radius: 0.25rem;
+        font-size: 0.85rem;
+      }
+      .dbc-controls button {
+        font-size: 0.82rem;
+        padding: 0.3rem 0.6rem;
+      }
+      .dbc-controls select {
+        background: #1a1a1a;
+        color: #eee;
+        border: 1px solid #444;
+        border-radius: 0.25rem;
+        font-size: 0.82rem;
+      }
+      .dbc-caption {
+        font-size: 0.76rem;
+        color: #9ca3af;
+        margin-bottom: 0.4rem;
+      }
+      .dbc-table-wrap {
+        max-height: 460px;
+        overflow: auto;
+        border: 1px solid #333;
+        border-radius: 0.25rem;
+      }
+      .dbc-table {
+        border-collapse: collapse;
+        font-size: 0.76rem;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+      .dbc-table th {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        background: #14181f;
+        color: #cbd5e1;
+        text-align: left;
+        padding: 0.3rem 0.5rem;
+        border-bottom: 1px solid #333;
+        font-weight: 600;
+      }
+      .dbc-table th.dbc-key {
+        color: #93c5fd;
+      }
+      .dbc-table td {
+        padding: 0.2rem 0.5rem;
+        border-bottom: 1px solid #222;
+        color: #d4d4d4;
+      }
+      .dbc-table td.num {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      .dbc-table tbody tr:hover td {
+        background: #1b1f27;
+      }
+      .tables-read-alsoread {
+        font-size: 0.74rem;
+        color: #6b7280;
+        padding: 0.3rem 0.4rem 0 0.4rem;
+      }
+      .tables-read-link {
+        color: #93c5fd;
+        text-decoration: none;
+      }
+      .tables-read-link:hover {
+        text-decoration: underline;
+      }
+      .terrain-canvas {
+        max-width: 900px;
+        background: #8fa8c0;
+      }
+      .terrain-touch {
+        display: none;
+      }
+      @media (pointer: coarse) {
+        .terrain-touch {
+          display: inline-block;
+          font-size: 0.85rem;
+          padding: 0.35rem 0.6rem;
+        }
+        .terrain-hint {
+          display: none;
+        }
+      }
+      .terrain-hint {
+        font-size: 0.78rem;
+        color: #9ca3af;
+      }
+      .terrain-prop-controls {
+        display: flex;
+        gap: 0.9rem;
+        align-items: center;
+        flex-wrap: wrap;
+        padding: 0.35rem 0.4rem;
+        border-bottom: 1px solid #262626;
+      }
+      .terrain-prop-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+        font-size: 0.82rem;
+        color: #cbd5e1;
+        cursor: pointer;
+      }
+      /* The reference list grows with its content: a voice row per event, extras per look. */
+      .dbc-list .m2-texture-list {
+        max-height: none;
+        overflow: visible;
+      }
+      .dbc-list .refs-row {
+        display: flex;
+        flex-direction: column;
+        padding: 0.15rem 0.4rem;
+        border-bottom: 1px solid #262626;
+      }
+      .refs-voice-row .refs-voice-play {
+        display: flex;
+        gap: 0.5rem;
+        padding: 0.15rem 0 0.1rem;
+      }
+      .voice-play-button {
+        font-size: 0.72rem;
+        padding: 0.15rem 0.5rem;
+        border-radius: 0.35rem;
+        border: 1px solid #3a3a3a;
+        background: #1c1c1c;
+        color: #ddd;
+        cursor: pointer;
+      }
+      .voice-play-button:hover {
+        background: #262626;
+      }
+      .voice-player {
+        height: 30px;
+        width: min(320px, 100%);
+      }
+      .refs-items a {
+        margin-right: 0.1rem;
+      }
+      .dbc-list .refs-heading {
+        padding-top: 0.4rem;
+      }
+      .terrain-placements .terrain-placement {
+        display: flex;
+        gap: 0.5rem;
+        align-items: baseline;
+        padding: 0.15rem 0.4rem;
+        border-bottom: 1px solid #262626;
+      }
+      .sound-panel {
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+        padding: 0.75rem;
+        max-width: 720px;
+      }
+      .sound-player {
+        width: 100%;
+      }
+      .sound-info {
+        font-size: 0.78rem;
+        color: #9ca3af;
+        font-variant-numeric: tabular-nums;
+      }
+      .sound-kits {
+        border-top: 1px solid #333;
+        padding-top: 0.35rem;
+      }
+      .sound-kit {
+        font-size: 0.76rem;
+        color: #cbd5e1;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      .sound-kit-none {
+        color: #6b7280;
+      }
       #progress {
         width: 100%;
         max-width: 400px;
         margin: 0.5rem 0;
+      }
+      #about {
+        margin: 0.5rem 0 1rem;
+      }
+      #about summary {
+        cursor: pointer;
+        font-size: 0.85rem;
+        color: #9ca3af;
+      }
+      #about p {
+        font-size: 0.85rem;
+        color: #9ca3af;
+        max-width: 60rem;
+      }
+
+      /* A phone has no room for five columns: each row becomes a card with the path on its own
+         line and the metadata under it. */
+      @media (max-width: 720px) {
+        body {
+          padding: 0.6rem;
+        }
+        h1 {
+          font-size: 1.45rem;
+          margin-bottom: 0.4rem;
+        }
+        button {
+          padding: 0.45rem 0.85rem;
+          font-size: 0.9rem;
+        }
+        #pagination {
+          gap: 0.4rem;
+        }
+        #pagination label {
+          margin-left: 0 !important;
+        }
+        #table-container td.archive.repeat {
+          display: none;
+        }
+        #table-container td.path[data-label]::before {
+          content: '';
+        }
+        #table-container td.path {
+          margin-bottom: 0.15rem;
+        }
+        /* The listing's own header, not the one on a preview's nested table. */
+        #table-container > table > thead {
+          display: none;
+        }
+        #table-container > table,
+        #table-container > table > tbody,
+        #table-container > table > tbody > tr,
+        #table-container > table > tbody > tr > td {
+          display: block;
+          width: auto;
+        }
+        #table-container > table > tbody > tr {
+          padding: 0.55rem 0.15rem;
+          border-bottom: 1px solid #333;
+        }
+        #table-container > table > tbody > tr:hover > td {
+          background: transparent;
+        }
+        #table-container > table > tbody > tr > td {
+          border: none;
+          padding: 0;
+        }
+        #table-container td.path {
+          font-size: 0.95rem;
+          line-height: 1.35;
+          word-break: break-word;
+        }
+        #table-container > table > tbody > tr > td.archive,
+        #table-container > table > tbody > tr > td.num,
+        #table-container > table > tbody > tr > td.flags {
+          display: inline-block;
+          vertical-align: baseline;
+          margin: 0.35rem 0.9rem 0 0;
+          text-align: left;
+          color: #b0b0b0;
+          font-size: 0.8rem;
+        }
+        #table-container td[data-label]::before {
+          content: attr(data-label) ' ';
+          color: #6b7280;
+          font-size: 0.72rem;
+          text-transform: lowercase;
+        }
+        #table-container td.flags[data-label]::before {
+          content: '';
+        }
+        .m2-canvas {
+          height: 320px;
+        }
+        .dbc-table-wrap {
+          max-height: 320px;
+        }
+        .dbc-table {
+          font-size: 0.72rem;
+        }
+        .m2-textures {
+          max-width: none;
+        }
       }
     </style>
   </head>
   <body>
     <h1>MPQ Browser</h1>
     <p>
-      Select a folder containing one or more MPQ files. Click a
-      <code>.blp</code> texture to preview it, or a <code>.m2</code> model
-      to open an interactive 3D viewer with animations and textures.
+      Click a <code>.blp</code> texture to preview it, an <code>.m2</code> model for an interactive
+      3D viewer with animations and the textures it binds, an <code>.adt</code> terrain tile to fly
+      over it with its layer textures listed, a <code>.dbc</code> table to read it with its column
+      names, or a <code>.wav</code> / <code>.mp3</code> to listen.
     </p>
+    <details id="about">
+      <summary>How it reads the archives</summary>
+      <p>
+        Every format is the benilla client's own code, compiled to WebAssembly:
+        <code>benilla-mpq</code> for the archives, <code>benilla-blp</code> for textures and
+        <code>benilla-formats</code> for models and the character tables. A local server streams
+        byte ranges, so no archive is loaded into browser memory. <b>Select Folder</b> works
+        without that server when the browser has the File System Access API.
+      </p>
+    </details>
     <button id="pick-folder">Select Folder</button>
     <div id="status">Ready</div>
     <progress id="progress" value="0" max="100" hidden></progress>
