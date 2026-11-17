@@ -328,11 +328,53 @@
         max-width: 900px;
         background: #8fa8c0;
       }
+      .source-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        align-items: center;
+      }
+      .source-or {
+        color: #888;
+        font-size: 0.85rem;
+      }
+      #server-url {
+        flex: 1 1 18rem;
+        max-width: 26rem;
+        padding: 0.4rem 0.6rem;
+        border-radius: 0.375rem;
+        border: 1px solid #3a3a3a;
+        background: #1c1c1c;
+        color: #eee;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.8rem;
+      }
       .terrain-touch {
         display: none;
       }
       @media (pointer: coarse) {
-        .terrain-touch {
+        .source-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        align-items: center;
+      }
+      .source-or {
+        color: #888;
+        font-size: 0.85rem;
+      }
+      #server-url {
+        flex: 1 1 18rem;
+        max-width: 26rem;
+        padding: 0.4rem 0.6rem;
+        border-radius: 0.375rem;
+        border: 1px solid #3a3a3a;
+        background: #1c1c1c;
+        color: #eee;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.8rem;
+      }
+      .terrain-touch {
           display: inline-block;
           font-size: 0.85rem;
           padding: 0.35rem 0.6rem;
@@ -553,6 +595,12 @@
     <details id="about">
       <summary>How it reads the archives</summary>
       <p>
+        A machine holding the client can serve the archives, and this page can sit anywhere: run
+        <code>DATA_DIR=/path/to/Data node server.mjs</code> beside your client, publish it with
+        <code>tailscale serve 8088</code> for a certificate HTTPS pages accept, then paste that
+        address above. Nothing but byte ranges crosses the network.
+      </p>
+      <p>
         Every format is the benilla client's own code, compiled to WebAssembly:
         <code>benilla-mpq</code> for the archives, <code>benilla-blp</code> for textures and
         <code>benilla-formats</code> for models and the character tables. A local server streams
@@ -560,7 +608,18 @@
         without that server when the browser has the File System Access API.
       </p>
     </details>
-    <button id="pick-folder">Select Folder</button>
+    <div class="source-row">
+      <button id="pick-folder">Select Folder</button>
+      <span class="source-or">or</span>
+      <input
+        id="server-url"
+        type="url"
+        placeholder="https://my-machine.ts.net/  (archive server)"
+        autocomplete="off"
+        spellcheck="false"
+      />
+      <button id="connect-server">Connect</button>
+    </div>
     <div id="status">Ready</div>
     <progress id="progress" value="0" max="100" hidden></progress>
     <div id="stats"></div>

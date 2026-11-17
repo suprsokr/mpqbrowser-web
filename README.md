@@ -2,8 +2,9 @@
 
 A browser viewer for World of Warcraft MPQ archives, backed by the benilla client's own readers.
 
-Live: <https://suprsokr.github.io/mpqbrowser-web/>. GitHub Pages has no server, so there click
-**Select Folder** and pick your client's `Data` folder; everything runs on the files it reads.
+Live: <https://suprsokr.github.io/mpqbrowser-web/>. GitHub Pages has no server. There, either
+click **Select Folder** and pick your client's `Data` folder, or point the page at an archive
+server on the machine that holds the client (see [Share the archives](#share-the-archives)).
 
 List every file path the archives hold, preview a `.blp` texture, open an `.m2` model in a WebGL2
 viewer with its animations and textures, fly over an `.adt` terrain tile with its ground textures
@@ -102,6 +103,24 @@ Open `http://localhost:8088/`. The page mounts every `.mpq` in the folder on loa
 
 For the dev server instead, run `npm run serve` in one terminal and `npm run dev` in another; Vite
 proxies `/api` to port 8088.
+
+### Share the archives
+
+A page anywhere can read a machine that holds the client, including the GitHub Pages build:
+
+```bash
+DATA_DIR=/path/to/WoW/Data npm run share
+```
+
+`share` starts `server.mjs` and publishes it over HTTPS on the tailnet with
+`tailscale serve --set-path /mpq`, then prints the address to paste into the page's server field
+(`https://<machine>.<tailnet>.ts.net/mpq/`). HTTPS matters: a page served over `https://` cannot
+read an `http://` server, and Tailscale supplies a certificate browsers accept. The serving
+computer's own address works too (`http://<machine>:8088/`) as long as the page is `http://`.
+
+`server.mjs` sends `access-control-allow-origin: *` (override with `ALLOW_ORIGIN`) on the archive
+listings and on every byte range, so a page on another origin can mount them. The page remembers
+the last server it mounted in `localStorage` and reconnects on reload.
 
 ### Endpoints
 

@@ -302,12 +302,36 @@ async function mount(refs: ArchiveRef[], note: string): Promise<void> {
   }
 }
 
-/** The local server's archives, when the page is served by `server.mjs`. */
-async function loadFromServer(): Promise<boolean> {
-  setStatus('Looking for the local archive server...');
+/** Where the last mount came from, so a reload can offer the same server again. */
+const SERVER_KEY = 'mpqbrowser.server';
+
+/** `base` as an absolute URL ending in a slash, or null when it is not one. */
+function serverBase(base: string): string | null {
   try {
-    // Relative to the page, so the probe stays under the app's path on a project page.
-    const response = await fetch(new URL('api/archives', document.baseURI));
+    const url = new URL(base.trim(), document.baseURI);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return null;
+    }
+    return url.href.endsWith('/') ? url.href : `${url.href}/`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Mount the archives an `mpq-server`-style endpoint lists: same origin by default, or any server
+ * the reader names, which is how a page hosted elsewhere reads a machine that holds the client.
+ */
+async function loadFromServer(base?: string): Promise<boolean> {
+  const sameOrigin = !base;
+  const root = sameOrigin ? new URL('.', document.baseURI).href : serverBase(base);
+  if (!root) {
+    setStatus(`That is not a server address: ${base}`);
+    return false;
+  }
+  setStatus(sameOrigin ? 'Looking for the local archive server...' : `Reading ${root}...`);
+  try {
+    const response = await fetch(new URL('api/archives', root), { mode: 'cors' });
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
@@ -321,14 +345,49 @@ async function loadFromServer(): Promise<boolean> {
     const refs: ArchiveRef[] = body.archives.map((a) => ({
       name: a.name,
       size: a.size,
-      url: `/api/archive/${encodeURIComponent(a.name)}`,
+      url: new URL(`api/archive/${encodeURIComponent(a.name)}`, root).href,
     }));
-    await mount(refs, `Server ${body.dataDir ?? ''}`);
+    await mount(refs, `Server ${root}`);
+    localStorage.setItem(SERVER_KEY, root);
     return true;
   } catch (e) {
-    setStatus(`No local archive server (${String(e)}). Pick a Data folder instead.`);
+    setStatus(
+      sameOrigin
+        ? `No local archive server (${String(e)}). Pick a Data folder, or name one below.`
+        : `Could not read ${root}: ${String(e)}`
+    );
     return false;
   }
+}
+
+/** The server field: an address, and the button that mounts it. */
+function wireServerField(): void {
+  const field = document.getElementById('server-url') as HTMLInputElement | null;
+  const button = document.getElementById('connect-server') as HTMLButtonElement | null;
+  if (!field || !button) {
+    return;
+  }
+  const saved = localStorage.getItem(SERVER_KEY);
+  if (saved) {
+    field.value = saved;
+  }
+  const connect = (): void => {
+    const base = serverBase(field.value);
+    if (!base) {
+      setStatus('Enter an http:// or https:// address for the archive server.');
+      return;
+    }
+    button.disabled = true;
+    void loadFromServer(base).finally(() => {
+      button.disabled = false;
+    });
+  };
+  button.addEventListener('click', connect);
+  field.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      connect();
+    }
+  });
 }
 
 /** What a preview panel holds that needs tearing down: a GL viewer, or a playing sound. */
@@ -1966,7 +2025,15 @@ function handleTableClick(event: MouseEvent): void {
 }
 
 pickButton.addEventListener('click', onPickFolder);
-void loadFromServer();
+wireServerField();
+void (async () => {
+  // The saved server first: a reader who mounted a remote machine last time wants it back.
+  const saved = localStorage.getItem(SERVER_KEY);
+  if (saved && (await loadFromServer(saved))) {
+    return;
+  }
+  await loadFromServer();
+})();
 filterInput.addEventListener('input', applyFilter);
 prevPageBtn.addEventListener('click', () => goToPage(currentPage - 1));
 nextPageBtn.addEventListener('click', () => goToPage(currentPage + 1));

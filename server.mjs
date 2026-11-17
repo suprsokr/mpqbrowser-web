@@ -6,6 +6,11 @@
 //
 //   DATA_DIR=/path/to/WoW/Data PORT=8088 node server.mjs
 //
+// The page can run somewhere else entirely (GitHub Pages, another machine): it mounts these
+// archives from whatever URL it is given, so every answer carries CORS headers. A page served over
+// HTTPS cannot read an HTTP server, which is what `tailscale serve` fixes by putting a real
+// certificate in front of this one.
+//
 // `DATA_DIR` has no default: the archives are the listener's own client data, and a guessed path
 // would only ever be right on one machine.
 
@@ -27,6 +32,18 @@ if (!dataArg) {
 const DATA_DIR = resolve(dataArg.replace(/^~/, homedir()));
 const PORT = Number(process.env.PORT || 8088);
 const HOST = process.env.HOST || '0.0.0.0';
+/// Which origins may read the archives: `*` by default, so a page on GitHub Pages can point here.
+const ALLOW_ORIGIN = process.env.ALLOW_ORIGIN || '*';
+
+/** The CORS headers every answer carries, including the preflight a `Range` request needs. */
+const CORS = {
+  'access-control-allow-origin': ALLOW_ORIGIN,
+  'access-control-allow-methods': 'GET, HEAD, OPTIONS',
+  'access-control-allow-headers': 'Range, Content-Type',
+  'access-control-expose-headers': 'Content-Range, Content-Length, Accept-Ranges',
+  'access-control-max-age': '86400',
+  vary: 'Origin',
+};
 
 const CONTENT_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -59,6 +76,7 @@ async function scanArchives() {
 function json(res, status, body) {
   const text = JSON.stringify(body);
   res.writeHead(status, {
+    ...CORS,
     'content-type': 'application/json; charset=utf-8',
     'content-length': Buffer.byteLength(text),
     'cache-control': 'no-store',
@@ -102,6 +120,7 @@ function serveArchive(req, res, url) {
   }
   const length = range.end - range.start + 1;
   res.writeHead(206, {
+    ...CORS,
     'content-type': 'application/octet-stream',
     'content-length': length,
     'content-range': `bytes ${range.start}-${range.end}/${hit.size}`,
@@ -128,19 +147,25 @@ function serveStatic(res, pathname) {
   try {
     const info = statSync(file);
     res.writeHead(200, {
+      ...CORS,
       'content-type': type,
       'content-length': info.size,
       'cache-control': 'no-cache',
     });
     createReadStream(file).pipe(res);
   } catch {
-    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+    res.writeHead(404, { ...CORS, 'content-type': 'text/plain; charset=utf-8' });
     res.end('not found');
   }
 }
 
 const server = createServer((req, res) => {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, CORS);
+    res.end();
+    return;
+  }
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     json(res, 405, { error: 'GET only' });
     return;
@@ -166,4 +191,9 @@ await scanArchives();
 server.listen(PORT, HOST, () => {
   console.log(`MPQ browser on http://${HOST}:${PORT}/`);
   console.log(`Data: ${DATA_DIR} (${archives.size} archives)`);
+  console.log(`Archive API for another page: http://<this machine>:${PORT}/api/archives`);
+  console.log(
+    'Over HTTPS (needed by an HTTPS page), publish it with a real certificate:\n' +
+      `  tailscale serve --bg ${PORT}`
+  );
 });

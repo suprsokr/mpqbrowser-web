@@ -11,7 +11,8 @@
     "build": "node tools/build.mjs",
     "build:web": "cd www && npm run build",
     "serve": "node server.mjs",
-    "preview": "cd www && npm run preview"
+    "preview": "cd www && npm run preview",
+    "share": "node tools/share.mjs"
   },
   "keywords": [
     "warcraft",
