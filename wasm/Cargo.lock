@@ -73,7 +73,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 [[package]]
 name = "benilla-adt"
 version = "0.3.1"
-source = "git+https://github.com/suprsokr/benilla?rev=0226eb1033b2bafbf67bf85a6c893aa90fced8db#0226eb1033b2bafbf67bf85a6c893aa90fced8db"
+source = "git+https://github.com/suprsokr/benilla?rev=b52563fecaac31380bb2bb13a8a135dd08754438#b52563fecaac31380bb2bb13a8a135dd08754438"
 dependencies = [
  "benilla-bytes",
 ]
@@ -81,7 +81,7 @@ dependencies = [
 [[package]]
 name = "benilla-blp"
 version = "0.3.1"
-source = "git+https://github.com/suprsokr/benilla?rev=0226eb1033b2bafbf67bf85a6c893aa90fced8db#0226eb1033b2bafbf67bf85a6c893aa90fced8db"
+source = "git+https://github.com/suprsokr/benilla?rev=b52563fecaac31380bb2bb13a8a135dd08754438#b52563fecaac31380bb2bb13a8a135dd08754438"
 dependencies = [
  "benilla-bytes",
  "texpresso",
@@ -90,12 +90,12 @@ dependencies = [
 [[package]]
 name = "benilla-bytes"
 version = "0.3.1"
-source = "git+https://github.com/suprsokr/benilla?rev=0226eb1033b2bafbf67bf85a6c893aa90fced8db#0226eb1033b2bafbf67bf85a6c893aa90fced8db"
+source = "git+https://github.com/suprsokr/benilla?rev=b52563fecaac31380bb2bb13a8a135dd08754438#b52563fecaac31380bb2bb13a8a135dd08754438"
 
 [[package]]
 name = "benilla-dbc"
 version = "0.3.1"
-source = "git+https://github.com/suprsokr/benilla?rev=0226eb1033b2bafbf67bf85a6c893aa90fced8db#0226eb1033b2bafbf67bf85a6c893aa90fced8db"
+source = "git+https://github.com/suprsokr/benilla?rev=b52563fecaac31380bb2bb13a8a135dd08754438#b52563fecaac31380bb2bb13a8a135dd08754438"
 dependencies = [
  "benilla-bytes",
 ]
@@ -103,7 +103,7 @@ dependencies = [
 [[package]]
 name = "benilla-formats"
 version = "0.3.1"
-source = "git+https://github.com/suprsokr/benilla?rev=0226eb1033b2bafbf67bf85a6c893aa90fced8db#0226eb1033b2bafbf67bf85a6c893aa90fced8db"
+source = "git+https://github.com/suprsokr/benilla?rev=b52563fecaac31380bb2bb13a8a135dd08754438#b52563fecaac31380bb2bb13a8a135dd08754438"
 dependencies = [
  "anyhow",
  "benilla-adt",
@@ -121,7 +121,7 @@ dependencies = [
 [[package]]
 name = "benilla-m2"
 version = "0.3.1"
-source = "git+https://github.com/suprsokr/benilla?rev=0226eb1033b2bafbf67bf85a6c893aa90fced8db#0226eb1033b2bafbf67bf85a6c893aa90fced8db"
+source = "git+https://github.com/suprsokr/benilla?rev=b52563fecaac31380bb2bb13a8a135dd08754438#b52563fecaac31380bb2bb13a8a135dd08754438"
 dependencies = [
  "benilla-bytes",
 ]
@@ -129,7 +129,7 @@ dependencies = [
 [[package]]
 name = "benilla-mpq"
 version = "0.3.1"
-source = "git+https://github.com/suprsokr/benilla?rev=0226eb1033b2bafbf67bf85a6c893aa90fced8db#0226eb1033b2bafbf67bf85a6c893aa90fced8db"
+source = "git+https://github.com/suprsokr/benilla?rev=b52563fecaac31380bb2bb13a8a135dd08754438#b52563fecaac31380bb2bb13a8a135dd08754438"
 dependencies = [
  "benilla-bytes",
  "flate2",
@@ -138,7 +138,7 @@ dependencies = [
 [[package]]
 name = "benilla-wdt"
 version = "0.3.1"
-source = "git+https://github.com/suprsokr/benilla?rev=0226eb1033b2bafbf67bf85a6c893aa90fced8db#0226eb1033b2bafbf67bf85a6c893aa90fced8db"
+source = "git+https://github.com/suprsokr/benilla?rev=b52563fecaac31380bb2bb13a8a135dd08754438#b52563fecaac31380bb2bb13a8a135dd08754438"
 
 [[package]]
 name = "benilla-web"
@@ -158,7 +158,7 @@ dependencies = [
 [[package]]
 name = "benilla-wmo"
 version = "0.3.1"
-source = "git+https://github.com/suprsokr/benilla?rev=0226eb1033b2bafbf67bf85a6c893aa90fced8db#0226eb1033b2bafbf67bf85a6c893aa90fced8db"
+source = "git+https://github.com/suprsokr/benilla?rev=b52563fecaac31380bb2bb13a8a135dd08754438#b52563fecaac31380bb2bb13a8a135dd08754438"
 dependencies = [
  "benilla-bytes",
 ]
